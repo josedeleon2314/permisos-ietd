@@ -870,10 +870,22 @@ function bindDocente() {
   document.getElementById("f-motivo").oninput = e => { state.form.motivo = e.target.value; };
   document.getElementById("f-archivo").onchange = e => {
     const f = e.target.files[0]; if (!f) return;
-    if (f.type !== "application/pdf") { setState({ fErr:"Solo se permiten archivos PDF." }); return; }
-    if (f.size > 800 * 1024) { setState({ fErr:`El archivo pesa ${(f.size/1024).toFixed(0)}KB. El máximo permitido es 800KB. Comprime el PDF en ilovepdf.com e intenta de nuevo.` }); return; }
+    if (f.type !== "application/pdf") { setState({ fErr:"Solo se permiten archivos PDF.", fOk:"" }); e.target.value=""; return; }
+    if (f.size > 800 * 1024) {
+      setState({ fErr:`El archivo pesa ${(f.size/1024).toFixed(0)}KB. El máximo permitido es 800KB. Comprime el PDF en ilovepdf.com e intenta de nuevo.`, fOk:"" });
+      e.target.value="";
+      state.form.archivoNombre = "";
+      state.form.archivoData = "";
+      render();
+      return;
+    }
     const r = new FileReader();
-    r.onload = ev => { state.form.archivoFile = null; state.form.archivoNombre = f.name; state.form.archivoData = ev.target.result; render(); };
+    r.onload = ev => {
+      state.form.archivoNombre = f.name;
+      state.form.archivoData = ev.target.result;
+      state.fErr = "";
+      render();
+    };
     r.readAsDataURL(f);
   };
   document.getElementById("btn-solicitar").onclick = solicitar;
