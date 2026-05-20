@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8"  />
+  <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Permisos Docentes — IETD San José de Sitionuevo</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
@@ -9,7 +9,7 @@
   {
     "imports": {
       "firebase/app": "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js",
-      "firebase/firestore": "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js"
+      "firebase/storage": "https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js"
     }
   }
   </script>
@@ -128,7 +128,7 @@ import {
   getFirestore, collection, doc, getDoc, getDocs,
   setDoc, updateDoc, deleteDoc, onSnapshot, query, orderBy
 } from "firebase/firestore";
-
+import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
 // ── FIREBASE CONFIG ──
 const firebaseConfig = {
   apiKey: "AIzaSyAMKOjybLiBmcuws8r5kMitWAH1hHkGNJM",
@@ -140,6 +140,7 @@ const firebaseConfig = {
 };
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
+const storage = getStorage(app);
 
 // ── COLECCIONES ──
 const COL_DOCENTES  = "docentes";
@@ -332,7 +333,7 @@ function handleExcel(e) {
 
 // ── SOLICITAR PERMISO ──
 async function solicitar() {
-  const { form, user, permisos, maxPerDay } = state;
+  const { form, user, permisos } = state;
   setState({ fErr:"", fOk:"" });
   if (!form.fecha || !form.motivo.trim()) { setState({ fErr:"Completa fecha y motivo." }); return; }
   if (!form.archivoData) { setState({ fErr:"El documento adjunto en PDF es obligatorio." }); return; }
@@ -341,10 +342,23 @@ async function solicitar() {
   if (enMes.length >= 3) { setState({ fErr:"Ya tienes 3 permisos este mes." }); return; }
   const enDia = permisos.filter(p => p.fecha===form.fecha && p.estado!=="rechazado");
   if (enDia.length >= 3) { setState({ fErr:"Ya hay 3 docentes con permiso ese día." }); return; }
-  const id = Date.now();
-  const p = { id, docenteId:user.id, docenteNombre:user.nombre, sede:user.sede||"", fecha:form.fecha, motivo:form.motivo, archivoNombre:form.archivoNombre, archivoData:form.archivoData, estado:"pendiente", observacion:"", ts:new Date().toISOString() };
-  await savePermiso(p);
-  setState({ form:{ fecha:"", motivo:"", archivoNombre:"", archivoData:"" }, fOk:"Solicitud enviada correctamente." });
+
+  try {
+    const id = Date.now();
+    const p = {
+      id, docenteId:user.id, docenteNombre:user.nombre, sede:user.sede||"",
+      fecha:form.fecha, motivo:form.motivo,
+      archivoNombre:form.archivoNombre,
+      archivoData:form.archivoData,
+      archivoURL: null,
+      estado:"pendiente", observacion:"", ts:new Date().toISOString()
+    };
+    await savePermiso(p);
+    setState({ form:{ fecha:"", motivo:"", archivoNombre:"", archivoData:"", archivoFile:null }, fOk:"Solicitud enviada correctamente." });
+  } catch(e) {
+    setState({ fErr:"Error al guardar. El archivo puede ser muy grande, comprime el PDF en ilovepdf.com" });
+    console.error(e);
+  }
 }
 
 // ── DECIDIR PERMISO ──
@@ -648,7 +662,7 @@ function renderRector() {
           ${p.sede?`<p style="color:var(--sub)">Sede: ${p.sede}</p>`:""}
           <p style="color:var(--sub)">Fecha: ${fmtDate(p.fecha)}</p>
           <p style="color:var(--sub)">Motivo: ${p.motivo}</p>
-          ${p.archivoData?`<a href="${p.archivoData}" download="${p.archivoNombre}" style="font-size:12px">📎 Descargar PDF</a>`:""}
+          ${p.archivoURL?`<a href="${p.archivoURL}" target="_blank" style="font-size:12px">📎 Descargar PDF</a>`:""}
           <p style="font-size:12px;margin-top:6px;color:${restantes<=0?"var(--red)":"var(--green)"};font-weight:500">
             ${restantes<=0?`⚠️ Límite alcanzado (${maxPerDay}/${maxPerDay})`:`Cupos disponibles: ${restantes}`}
           </p>
@@ -681,7 +695,7 @@ function renderRector() {
           <div>
             <p style="font-weight:500">${p.docenteNombre}</p>
             <p style="font-size:12px;color:var(--sub)">${p.sede?p.sede+" · ":""}${fmtDate(p.fecha)} · ${p.motivo}</p>
-            ${p.archivoData?`<a href="${p.archivoData}" download="${p.archivoNombre}" style="font-size:11px">Ver PDF</a>`:""}
+            ${p.archivoURL?`<a href="${p.archivoURL}" target="_blank" style="font-size:11px">Ver PDF</a>`:""}
           </div>
           <button class="btn btn-primary btn-sm btn-revisar" data-id="${p.id}">Revisar</button>
         </div>`).join("")}
@@ -818,7 +832,7 @@ function renderDocente() {
           <input type="date" id="f-fecha" class="inp" value="${form.fecha}"/></div>
         <div class="field"><label class="lbl">Adjunto PDF <span class="required">*</span></label>
           <input type="file" id="f-archivo" accept=".pdf"/>
-          ${!form.archivoData?`<p style="font-size:11px;color:var(--red);margin-top:3px">Requerido</p>`:""}
+          ${!form.archivoData?`<p style="font-size:11px;color:var(--red);margin-top:3px">Requerido (máx. 800KB)</p>`:""}
           ${form.archivoNombre?`<p style="font-size:11px;color:var(--green);margin-top:3px">✓ ${form.archivoNombre}</p>`:""}
         </div>
       </div>
@@ -842,7 +856,7 @@ function renderDocente() {
         <div>
           <p style="font-weight:500">${fmtDate(p.fecha)}</p>
           <p style="font-size:12px;color:var(--sub)">${p.motivo}</p>
-          ${p.archivoData?`<a href="${p.archivoData}" download="${p.archivoNombre}" style="font-size:11px">Descargar PDF</a>`:""}
+          ${p.archivoURL?`<a href="${p.archivoURL}" target="_blank" style="font-size:11px">Descargar PDF</a>`:""}
           ${p.observacion?`<p style="font-size:11px;color:var(--sub)">Obs: ${p.observacion}</p>`:""}
         </div>
         ${badge(p.estado)}
@@ -857,8 +871,9 @@ function bindDocente() {
   document.getElementById("f-archivo").onchange = e => {
     const f = e.target.files[0]; if (!f) return;
     if (f.type !== "application/pdf") { setState({ fErr:"Solo se permiten archivos PDF." }); return; }
+    if (f.size > 800 * 1024) { setState({ fErr:`El archivo pesa ${(f.size/1024).toFixed(0)}KB. El máximo permitido es 800KB. Comprime el PDF en ilovepdf.com e intenta de nuevo.` }); return; }
     const r = new FileReader();
-    r.onload = ev => { state.form.archivoNombre = f.name; state.form.archivoData = ev.target.result; render(); };
+    r.onload = ev => { state.form.archivoFile = null; state.form.archivoNombre = f.name; state.form.archivoData = ev.target.result; render(); };
     r.readAsDataURL(f);
   };
   document.getElementById("btn-solicitar").onclick = solicitar;
