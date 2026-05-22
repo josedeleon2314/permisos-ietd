@@ -289,7 +289,7 @@ async function solicitar() {
 
 // ── CANCELAR PERMISO (DOCENTE) ──
 async function cancelarPermiso(id) {
-  const p = state.permisos.find(x => x.id === id);
+  const p = state.permisos.find(x => String(x.id) === String(id));
   if (!p) return;
   const hoy = new Date();
   const hoyStr = `${hoy.getFullYear()}-${String(hoy.getMonth()+1).padStart(2,"0")}-${String(hoy.getDate()).padStart(2,"0")}`;
@@ -706,7 +706,10 @@ function bindRector(){
   const fdoc=document.getElementById("fil-docente");
   if(fdoc) fdoc.onchange=e=>setState({filtroDocente:e.target.value});
   document.querySelectorAll(".btn-cancelar-permiso").forEach(b=>{
-    b.onclick=()=>cancelarPermiso(Number(b.dataset.id));
+    b.onclick=async(e)=>{
+      e.stopPropagation();
+      await cancelarPermiso(Number(b.dataset.id));
+    };
   });
   const fmd=document.getElementById("fil-mes-doc");
   if(fmd) fmd.onchange=e=>setState({filtroMesDoc:e.target.value});
@@ -762,7 +765,7 @@ function renderDocente(){
         </div>
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
           ${badge(p.estado)}
-          ${puedeCancelar?`<button class="btn btn-danger btn-sm btn-cancelar-permiso" data-id="${p.id}" style="font-size:11px;padding:4px 10px">Cancelar</button>`:""}
+          ${puedeCancelar?`<button class="btn btn-danger btn-sm btn-cancelar-permiso" data-id="${p.id}" style="font-size:11px;padding:4px 10px">✕ Cancelar</button>`:""}
         </div>
       </div>`;}).join("")}
   </div>
