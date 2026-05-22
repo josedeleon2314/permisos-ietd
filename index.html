@@ -50,9 +50,6 @@
     .btn-full { width: 100%; }
     .btn-sm { padding: 6px 14px; font-size: 12px; }
     .badge { font-size: 11px; padding: 3px 10px; border-radius: 20px; font-weight: 500; display: inline-block; }
-    .badge-pendiente { background: var(--yellow-bg); color: var(--yellow); }
-    .badge-aprobado { background: var(--green-bg); color: var(--green); }
-    .badge-rechazado { background: var(--red-bg); color: var(--red); }
     .tabs { display: flex; gap: 4px; background: var(--border); border-radius: 8px; padding: 4px; width: fit-content; margin-bottom: 20px; flex-wrap: wrap; }
     .tab { padding: 6px 16px; border-radius: 6px; border: none; font-size: 13px; font-weight: 500; background: transparent; color: var(--sub); cursor: pointer; }
     .tab.active { background: var(--white); color: var(--blue); box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
@@ -120,7 +117,9 @@ let state = {
   fErr:"", fOk:"",
   pw: { actual:"", nueva:"", confirmar:"" }, pwErr:"", pwOk:"",
   resetPw: { nueva:"", confirmar:"" }, resetErr:"", resetOk:"",
-  excelMsg: { type:"", text:"" }, editMax: false, maxTemp: 5,
+  excelMsg: { type:"", text:"" },
+  permisosMsg: { type:"", text:"" },
+  editMax: false, maxTemp: 5,
   filtroMesDocente:"todos", filtroMesRector:"todos",
   filtroDia:"", filtroDocente:"todos", filtroMesDoc:"todos",
   filtroSede:"todos", filtroSedeDia:"todos",
@@ -152,13 +151,13 @@ function rolLabel(r){return{admin:"Administrador",rector:"Rector",docente:"Docen
 
 // ── FIREBASE ──
 async function loadSysUsers() {
-  const snap = await getDocs(collection(db, COL_SYSUSERS));
+  const snap = await getDocs(collection(db,COL_SYSUSERS));
   if (snap.empty) {
     const defaults = [
       {id:"admin", nombre:"Administrador",   rol:"admin",  password:"admin123",  documento:"admin",  sede:""},
       {id:"rector",nombre:"Rector Principal",rol:"rector", password:"rector123", documento:"rector", sede:""}
     ];
-    for (const u of defaults) await setDoc(doc(db,COL_SYSUSERS,u.id), u);
+    for (const u of defaults) await setDoc(doc(db,COL_SYSUSERS,u.id),u);
     state.sysUsers = defaults;
   } else {
     state.sysUsers = snap.docs.map(d=>d.data());
@@ -171,15 +170,15 @@ async function loadDocentes() {
 async function loadConfig() {
   try {
     const snap = await getDoc(doc(db,COL_CONFIG,"settings"));
-    state.maxPerDay = snap.exists() ? (snap.data().maxPerDay||5) : 5;
+    state.maxPerDay = snap.exists()?(snap.data().maxPerDay||5):5;
     state.maxTemp   = state.maxPerDay;
-  } catch(e) { state.maxPerDay=5; state.maxTemp=5; }
+  } catch(e){ state.maxPerDay=5; state.maxTemp=5; }
 }
 function listenPermisos() {
   onSnapshot(query(collection(db,COL_PERMISOS),orderBy("ts","desc")), snap=>{
     state.permisos = snap.docs.map(d=>d.data());
     render();
-  }, err=>console.error("Firestore error:",err));
+  }, err=>console.error("Firestore:",err));
 }
 async function saveDocentes(list) {
   const snap = await getDocs(collection(db,COL_DOCENTES));
@@ -192,13 +191,7 @@ async function updatePermiso(id,p) { await updateDoc(doc(db,COL_PERMISOS,String(
 async function saveSysUser(u)      { await setDoc(doc(db,COL_SYSUSERS,u.id),u); }
 async function saveConfig(v)       { await setDoc(doc(db,COL_CONFIG,"settings"),{maxPerDay:v}); state.maxPerDay=v; }
 
-// ── EVENTO GLOBAL PARA CANCELAR (delegación) ──
-document.addEventListener("click", async function(e) {
-  const btn = e.target.closest(".btn-cancelar-permiso");
-  if (!btn) return;
-  e.stopPropagation();
-  await cancelarPermiso(btn.dataset.id);
-});
+// ── INIT ──
 async function init() {
   try {
     await loadSysUsers();
@@ -207,17 +200,25 @@ async function init() {
     listenPermisos();
     render();
   } catch(e) {
-    console.error("Init error:",e);
-    document.getElementById("app").innerHTML=`<div class="loading">Error al conectar con Firebase. Revisa la consola.</div>`;
+    console.error("Init:",e);
+    document.getElementById("app").innerHTML=`<div class="loading">Error al conectar. Revisa la consola.</div>`;
   }
 }
 init();
+
+// ── EVENTO GLOBAL CANCELAR ──
+document.addEventListener("click", async function(e) {
+  const btn = e.target.closest(".btn-cancelar-permiso");
+  if (!btn) return;
+  e.stopPropagation();
+  await cancelarPermiso(btn.dataset.id);
+});
 
 // ── AUTH ──
 function login() {
   const documento = document.getElementById("inp-doc").value.trim();
   const password  = document.getElementById("inp-pass").value;
-  const u = [...state.sysUsers,...state.docentes].find(u=>u.documento===documento && u.password===password);
+  const u = [...state.sysUsers,...state.docentes].find(u=>u.documento===documento&&u.password===password);
   if (!u) { setState({loginErr:"Documento o contraseña incorrectos."}); return; }
   setState({user:u, loginErr:""});
 }
@@ -225,28 +226,28 @@ function logout() { setState({user:null, tab:"pendientes", modalPw:false, form:{
 
 // ── CONTRASEÑAS ──
 async function cambiarPw() {
-  const {pw,user} = state;
+  const {pw,user}=state;
   if (user.password!==pw.actual) { setState({pwErr:"La contraseña actual no es correcta.",pwOk:""}); return; }
   if (pw.nueva.length<4)         { setState({pwErr:"Mínimo 4 caracteres.",pwOk:""}); return; }
   if (pw.nueva!==pw.confirmar)   { setState({pwErr:"Las contraseñas no coinciden.",pwOk:""}); return; }
   const updated={...user,password:pw.nueva};
   if (user.rol==="docente") { await setDoc(doc(db,COL_DOCENTES,user.id),updated); state.docentes=state.docentes.map(d=>d.id===user.id?updated:d); }
   else { await saveSysUser(updated); state.sysUsers=state.sysUsers.map(s=>s.id===user.id?updated:s); }
-  setState({user:updated, pw:{actual:"",nueva:"",confirmar:""}, pwErr:"", pwOk:"Contraseña actualizada."});
+  setState({user:updated,pw:{actual:"",nueva:"",confirmar:""},pwErr:"",pwOk:"Contraseña actualizada."});
 }
 async function resetearPw() {
-  const {resetPw,modalReset} = state;
-  if (resetPw.nueva.length<4)       { setState({resetErr:"Mínimo 4 caracteres.",resetOk:""}); return; }
-  if (resetPw.nueva!==resetPw.confirmar) { setState({resetErr:"Las contraseñas no coinciden.",resetOk:""}); return; }
+  const {resetPw,modalReset}=state;
+  if (resetPw.nueva.length<4)           { setState({resetErr:"Mínimo 4 caracteres.",resetOk:""}); return; }
+  if (resetPw.nueva!==resetPw.confirmar){ setState({resetErr:"Las contraseñas no coinciden.",resetOk:""}); return; }
   const target=[...state.sysUsers,...state.docentes].find(u=>u.id===modalReset);
   if (!target) return;
   const updated={...target,password:resetPw.nueva};
   if (target.rol==="docente") { await setDoc(doc(db,COL_DOCENTES,target.id),updated); state.docentes=state.docentes.map(d=>d.id===target.id?updated:d); }
   else { await saveSysUser(updated); state.sysUsers=state.sysUsers.map(s=>s.id===target.id?updated:s); }
-  setState({resetPw:{nueva:"",confirmar:""}, resetErr:"", resetOk:`Contraseña de ${target.nombre} actualizada.`});
+  setState({resetPw:{nueva:"",confirmar:""},resetErr:"",resetOk:`Contraseña de ${target.nombre} actualizada.`});
 }
 
-// ── EXCEL ──
+// ── EXCEL DOCENTES ──
 function handleExcel(e) {
   const file=e.target.files[0]; if (!file) return;
   const reader=new FileReader();
@@ -266,15 +267,91 @@ function handleExcel(e) {
       if (nuevos.length===0) { setState({excelMsg:{type:"err",text:"No se encontraron filas válidas."}}); return; }
       await saveDocentes(nuevos);
       setState({excelMsg:{type:"ok",text:`✓ ${nuevos.length} docente(s) cargado(s).`}});
-    } catch(err) { setState({excelMsg:{type:"err",text:"Error al leer el archivo."}}); }
+    } catch(err){ setState({excelMsg:{type:"err",text:"Error al leer el archivo."}}); }
   };
   reader.readAsArrayBuffer(file);
   e.target.value="";
 }
 
+// ── EXCEL PERMISOS HISTÓRICOS ──
+async function handleExcelPermisos(e) {
+  const file=e.target.files[0]; if(!file) return;
+  setState({permisosMsg:{type:"",text:"Procesando..."}});
+  const reader=new FileReader();
+  reader.onload=async ev=>{
+    try {
+      const wb=XLSX.read(new Uint8Array(ev.target.result),{type:"array"});
+      let totalCargados=0, totalErrores=0;
+
+      for (const sheetName of wb.SheetNames) {
+        const ws=wb.Sheets[sheetName];
+        const rows=XLSX.utils.sheet_to_json(ws,{defval:""});
+        for (const row of rows) {
+          const documento=String(row["DOCUMENTO"]||row["documento"]||"").trim();
+          const nombre   =String(row["NOMBRE"]   ||row["nombre"]   ||row["NOMBRES"]||row["nombres"]||"").trim();
+          const sede     =String(row["SEDE"]      ||row["sede"]     ||"").trim();
+          const fechaRaw =row["FECHA"]||row["fecha"]||"";
+          if (!documento||!nombre||!fechaRaw) { totalErrores++; continue; }
+
+          // Parsear fecha
+          let fecha="";
+          if (typeof fechaRaw==="number") {
+            const d=new Date(Math.round((fechaRaw-25569)*86400*1000));
+            fecha=`${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,"0")}-${String(d.getUTCDate()).padStart(2,"0")}`;
+          } else {
+            const str=String(fechaRaw).trim();
+            if (str.includes("/")) {
+              const parts=str.split("/");
+              if (parts.length===3) {
+                const [d,m,y]=parts;
+                fecha=`${y.padStart(4,"0")}-${m.padStart(2,"0")}-${d.padStart(2,"0")}`;
+              }
+            } else if (str.includes("-")) {
+              fecha=str.substring(0,10);
+            }
+          }
+          if (!fecha||fecha.length!==10) { totalErrores++; continue; }
+
+          const docente=state.docentes.find(d=>d.documento===documento);
+          const docenteId=docente?docente.id:`doc_${documento}`;
+          const id=`hist_${documento}_${fecha}_${Math.floor(Math.random()*9999)}`;
+          await setDoc(doc(db,COL_PERMISOS,id),{
+            id, docenteId, docenteNombre:nombre, sede, fecha,
+            motivo:"Permiso cargado por administrador",
+            archivoNombre:null, archivoData:null,
+            estado:"aprobado", observacion:`Histórico - ${sheetName}`,
+            ts:new Date().toISOString(), historico:true
+          });
+          totalCargados++;
+          await new Promise(r=>setTimeout(r,80));
+        }
+      }
+      setState({permisosMsg:{type:"ok",text:`✓ ${totalCargados} permiso(s) cargado(s) en ${wb.SheetNames.length} hoja(s).${totalErrores>0?` ${totalErrores} fila(s) omitidas.`:""}`}});
+    } catch(err){
+      setState({permisosMsg:{type:"err",text:"Error al leer el archivo."}});
+      console.error(err);
+    }
+  };
+  reader.readAsArrayBuffer(file);
+  e.target.value="";
+}
+
+// ── CANCELAR PERMISO ──
+async function cancelarPermiso(id) {
+  const p=state.permisos.find(x=>String(x.id)===String(id));
+  if (!p) { alert("No se encontró el permiso."); return; }
+  const hoy=new Date();
+  const hoyStr=`${hoy.getFullYear()}-${String(hoy.getMonth()+1).padStart(2,"0")}-${String(hoy.getDate()).padStart(2,"0")}`;
+  if (p.fecha<=hoyStr) { alert("Solo puedes cancelar hasta el día anterior a la fecha del permiso."); return; }
+  if (!confirm(`¿Cancelar el permiso del ${fmtDate(p.fecha)}?`)) return;
+  try {
+    await updateDoc(doc(db,COL_PERMISOS,String(p.id)),{estado:"cancelado"});
+  } catch(e){ alert("Error al cancelar. Intenta de nuevo."); console.error(e); }
+}
+
 // ── SOLICITAR ──
 async function solicitar() {
-  const {form,user,permisos} = state;
+  const {form,user,permisos}=state;
   setState({fErr:"",fOk:""});
   if (!form.fecha||!form.motivo.trim()) { setState({fErr:"Completa fecha y motivo."}); return; }
   if (!form.archivoData)               { setState({fErr:"El documento adjunto en PDF es obligatorio."}); return; }
@@ -289,22 +366,9 @@ async function solicitar() {
       fecha:form.fecha,motivo:form.motivo,archivoNombre:form.archivoNombre,
       archivoData:form.archivoData,estado:"pendiente",observacion:"",ts:new Date().toISOString()});
     setState({form:{fecha:"",motivo:"",archivoNombre:"",archivoData:""},fOk:"Solicitud enviada correctamente."});
-  } catch(err) {
+  } catch(err){
     setState({fErr:"Error al guardar. El archivo puede ser muy grande, comprime el PDF en ilovepdf.com"});
   }
-}
-
-// ── CANCELAR PERMISO (DOCENTE) ──
-async function cancelarPermiso(id) {
-  const p = state.permisos.find(x => String(x.id) === String(id));
-  if (!p) { alert("No se encontró el permiso."); return; }
-  const hoy = new Date();
-  const hoyStr = `${hoy.getFullYear()}-${String(hoy.getMonth()+1).padStart(2,"0")}-${String(hoy.getDate()).padStart(2,"0")}`;
-  if (p.fecha <= hoyStr) { alert("No puedes cancelar este permiso. Solo puedes cancelar hasta el día anterior."); return; }
-  if (!confirm(`¿Cancelar el permiso del ${fmtDate(p.fecha)}?`)) return;
-  try {
-    await updateDoc(doc(db, COL_PERMISOS, String(p.id)), { estado:"cancelado" });
-  } catch(e) { alert("Error al cancelar. Intenta de nuevo."); console.error(e); }
 }
 
 // ── DECIDIR ──
@@ -314,13 +378,13 @@ async function decidir(id,estado) {
     const p=permisos.find(x=>x.id===id);
     const sede=p?.sede||"";
     const aprobadosDia=permisos.filter(x=>x.fecha===p.fecha&&x.estado==="aprobado"&&(x.sede||"")===sede).length;
-    if (aprobadosDia>=maxPerDay) { alert(`Límite de ${maxPerDay} permisos por día para la sede "${sede||"sin sede"}" ya fue alcanzado.`); return; }
+    if (aprobadosDia>=maxPerDay) { alert(`Límite de ${maxPerDay} permisos/día para la sede "${sede||"sin sede"}" alcanzado.`); return; }
   }
   await updatePermiso(id,{estado,observacion:modalObs});
   setState({modalPermiso:null,modalObs:""});
 }
 
-// ── DATOS DERIVADOS ──
+// ── DERIVADOS ──
 function derived() {
   const {user,permisos}=state;
   const misPermisos=permisos.filter(p=>p.docenteId===user?.id);
@@ -374,57 +438,47 @@ function topbarHtml(){
       <button id="btn-logout" class="btn btn-ghost btn-sm">Salir</button>
     </div>
   </div>`;}
-
 function bindTopbar(){
   document.getElementById("btn-logout").onclick=logout;
   document.getElementById("btn-pw").onclick=()=>setState({modalPw:true,pwErr:"",pwOk:"",pw:{actual:"",nueva:"",confirmar:""}});
 }
 
-// ── MODALES PW ──
+// ── MODALES ──
 function modalPwHtml(){
   if(!state.modalPw) return "";
   const {pw,pwErr,pwOk}=state;
-  return`<div class="overlay">
-    <div class="modal"><h3>Cambiar mi contraseña</h3>
-      ${["actual","nueva","confirmar"].map(k=>`<div class="field">
-        <label class="lbl">${{actual:"Contraseña actual",nueva:"Nueva contraseña",confirmar:"Confirmar nueva contraseña"}[k]}</label>
-        <input type="password" class="inp" id="pw-${k}" value="${pw[k]||""}" placeholder="••••••"/></div>`).join("")}
-      ${pwErr?`<p class="msg-err">${pwErr}</p>`:""}${pwOk?`<p class="msg-ok">${pwOk}</p>`:""}
-      <div class="modal-btns">
-        <button class="btn btn-primary" style="flex:1" id="btn-pw-save">Guardar</button>
-        <button class="btn btn-ghost" id="btn-pw-cancel">Cancelar</button>
-      </div></div></div>`;}
-
+  return`<div class="overlay"><div class="modal"><h3>Cambiar mi contraseña</h3>
+    ${["actual","nueva","confirmar"].map(k=>`<div class="field">
+      <label class="lbl">${{actual:"Contraseña actual",nueva:"Nueva contraseña",confirmar:"Confirmar nueva contraseña"}[k]}</label>
+      <input type="password" class="inp" id="pw-${k}" value="${pw[k]||""}" placeholder="••••••"/></div>`).join("")}
+    ${pwErr?`<p class="msg-err">${pwErr}</p>`:""}${pwOk?`<p class="msg-ok">${pwOk}</p>`:""}
+    <div class="modal-btns">
+      <button class="btn btn-primary" style="flex:1" id="btn-pw-save">Guardar</button>
+      <button class="btn btn-ghost" id="btn-pw-cancel">Cancelar</button>
+    </div></div></div>`;}
 function bindModalPw(){
   if(!state.modalPw) return;
-  ["actual","nueva","confirmar"].forEach(k=>{
-    document.getElementById(`pw-${k}`).oninput=e=>{state.pw[k]=e.target.value;};
-  });
+  ["actual","nueva","confirmar"].forEach(k=>{document.getElementById(`pw-${k}`).oninput=e=>{state.pw[k]=e.target.value;};});
   document.getElementById("btn-pw-save").onclick=cambiarPw;
   document.getElementById("btn-pw-cancel").onclick=()=>setState({modalPw:false});
 }
-
 function modalResetHtml(){
   if(!state.modalReset) return "";
   const target=[...state.sysUsers,...state.docentes].find(u=>u.id===state.modalReset);
   const {resetPw,resetErr,resetOk}=state;
-  return`<div class="overlay">
-    <div class="modal"><h3>Resetear contraseña</h3>
-      <p style="font-size:13px;color:var(--sub);margin-bottom:16px">${target?.nombre}</p>
-      ${["nueva","confirmar"].map(k=>`<div class="field">
-        <label class="lbl">${{nueva:"Nueva contraseña",confirmar:"Confirmar contraseña"}[k]}</label>
-        <input type="password" class="inp" id="rpw-${k}" value="${resetPw[k]||""}" placeholder="••••••"/></div>`).join("")}
-      ${resetErr?`<p class="msg-err">${resetErr}</p>`:""}${resetOk?`<p class="msg-ok">${resetOk}</p>`:""}
-      <div class="modal-btns">
-        <button class="btn btn-primary" style="flex:1" id="btn-reset-save">Guardar</button>
-        <button class="btn btn-ghost" id="btn-reset-cancel">Cerrar</button>
-      </div></div></div>`;}
-
+  return`<div class="overlay"><div class="modal"><h3>Resetear contraseña</h3>
+    <p style="font-size:13px;color:var(--sub);margin-bottom:16px">${target?.nombre}</p>
+    ${["nueva","confirmar"].map(k=>`<div class="field">
+      <label class="lbl">${{nueva:"Nueva contraseña",confirmar:"Confirmar contraseña"}[k]}</label>
+      <input type="password" class="inp" id="rpw-${k}" value="${resetPw[k]||""}" placeholder="••••••"/></div>`).join("")}
+    ${resetErr?`<p class="msg-err">${resetErr}</p>`:""}${resetOk?`<p class="msg-ok">${resetOk}</p>`:""}
+    <div class="modal-btns">
+      <button class="btn btn-primary" style="flex:1" id="btn-reset-save">Guardar</button>
+      <button class="btn btn-ghost" id="btn-reset-cancel">Cerrar</button>
+    </div></div></div>`;}
 function bindModalReset(){
   if(!state.modalReset) return;
-  ["nueva","confirmar"].forEach(k=>{
-    document.getElementById(`rpw-${k}`).oninput=e=>{state.resetPw[k]=e.target.value;};
-  });
+  ["nueva","confirmar"].forEach(k=>{document.getElementById(`rpw-${k}`).oninput=e=>{state.resetPw[k]=e.target.value;};});
   document.getElementById("btn-reset-save").onclick=resetearPw;
   document.getElementById("btn-reset-cancel").onclick=()=>setState({modalReset:null,resetErr:"",resetOk:""});
 }
@@ -452,7 +506,6 @@ function renderLogin(){
         <button id="btn-login" class="btn btn-primary btn-full">Ingresar</button>
       </div>
     </div></div>`;}
-
 function bindLogin(){
   document.getElementById("btn-login").onclick=login;
   document.getElementById("inp-pass").onkeydown=e=>{if(e.key==="Enter")login();};
@@ -460,12 +513,13 @@ function bindLogin(){
 
 // ── ADMIN ──
 function renderAdmin(){
-  const {excelMsg,docentes,sysUsers,maxPerDay,editMax,maxTemp,modalPw,modalReset}=state;
+  const {excelMsg,permisosMsg,docentes,sysUsers,maxPerDay,editMax,maxTemp,modalPw,modalReset}=state;
   const allUsers=[...sysUsers,...docentes];
   return`${topbarHtml()}
   <div class="page">
     <p style="font-size:18px;font-weight:500;margin-bottom:4px">Panel de Administración</p>
     <p style="font-size:13px;color:var(--sub);margin-bottom:24px">Gestión de usuarios, contraseñas y configuración.</p>
+
     <div class="card">
       <p style="font-size:14px;font-weight:500;margin-bottom:4px">Límite de permisos aprobados por día / sede</p>
       <p style="font-size:12px;color:var(--sub);margin-bottom:14px">El rector no podrá aprobar más de este número por sede en un mismo día.</p>
@@ -478,15 +532,29 @@ function renderAdmin(){
           <button class="btn btn-blue-light btn-sm" id="btn-max-edit">✏️ Editar</button>`}
       </div>
     </div>
+
     <div class="card">
       <p style="font-size:14px;font-weight:500;margin-bottom:4px">Cargar docentes desde Excel</p>
-      <p style="font-size:12px;color:var(--sub);margin-bottom:14px">Columnas requeridas: <b>DOCUMENTO</b>, <b>NOMBRES</b>, <b>SEDE</b>. Contraseña inicial = número de documento.</p>
+      <p style="font-size:12px;color:var(--sub);margin-bottom:14px">Columnas: <b>DOCUMENTO</b>, <b>NOMBRES</b>, <b>SEDE</b>. Contraseña inicial = número de documento.</p>
       <label class="btn btn-primary btn-sm" style="display:inline-block;cursor:pointer">
-        📂 Seleccionar Excel
+        📂 Seleccionar Excel de docentes
         <input type="file" id="inp-excel" accept=".xlsx,.xls" style="display:none"/>
       </label>
       ${excelMsg.text?`<span style="font-size:13px;margin-left:12px;color:${excelMsg.type==="ok"?"var(--green)":"var(--red)"}">${excelMsg.text}</span>`:""}
     </div>
+
+    <div class="card">
+      <p style="font-size:14px;font-weight:500;margin-bottom:4px">Cargar permisos históricos desde Excel</p>
+      <p style="font-size:12px;color:var(--sub);margin-bottom:4px">Columnas: <b>DOCUMENTO</b>, <b>NOMBRE</b>, <b>SEDE</b>, <b>FECHA</b>.</p>
+      <p style="font-size:12px;color:var(--sub);margin-bottom:4px">Fecha en formato <b>DD/MM/YYYY</b> o <b>YYYY-MM-DD</b>.</p>
+      <p style="font-size:12px;color:var(--sub);margin-bottom:14px">Soporta múltiples hojas (una por mes). Los permisos quedan como <b>Aprobados</b> en el historial.</p>
+      <label class="btn btn-success btn-sm" style="display:inline-block;cursor:pointer">
+        📋 Seleccionar Excel de permisos históricos
+        <input type="file" id="inp-excel-permisos" accept=".xlsx,.xls" style="display:none"/>
+      </label>
+      ${permisosMsg.text?`<p style="font-size:13px;margin-top:10px;color:${permisosMsg.type==="ok"?"var(--green)":"var(--red)"}">${permisosMsg.text}</p>`:""}
+    </div>
+
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
         <p style="font-size:14px;font-weight:500">Usuarios (${allUsers.length})</p>
@@ -509,6 +577,7 @@ function renderAdmin(){
 function bindAdmin(){
   bindTopbar(); bindModalPw(); bindModalReset();
   document.getElementById("inp-excel").onchange=handleExcel;
+  document.getElementById("inp-excel-permisos").onchange=handleExcelPermisos;
   const bc=document.getElementById("btn-clear");
   if(bc) bc.onclick=async()=>{await saveDocentes([]);setState({excelMsg:{type:"",text:""}});};
   const bme=document.getElementById("btn-max-edit");
@@ -528,11 +597,7 @@ function renderRector(){
     filtroMesRector,filtroDia,filtroDocente,filtroMesDoc,
     filtroSede,filtroSedeDia,filtroMesPend,filtroDocentePend}=state;
   const {pendientes,historialR}=derived();
-
-  // Sedes únicas
   const todasSedes=[...new Set(permisos.map(p=>p.sede||"Sin sede"))].sort();
-
-  // Pendientes con filtros: sede + mes + docente
   const mesesPend=uniqueMonths(pendientes);
   const docentesPend=[...new Set(pendientes.map(p=>p.docenteNombre))].sort();
   const pendientesFiltrados=pendientes.filter(p=>
@@ -540,7 +605,6 @@ function renderRector(){
     (filtroMesPend==="todos"||getMonthKey(p.fecha)===filtroMesPend)&&
     (filtroDocentePend==="todos"||p.docenteNombre===filtroDocentePend)
   );
-
   const mesesR=uniqueMonths(historialR);
   const histF=filtroMesRector==="todos"?historialR:historialR.filter(p=>getMonthKey(p.fecha)===filtroMesRector);
   const todosP=permisos.filter(p=>p.docenteNombre);
@@ -559,18 +623,9 @@ function renderRector(){
     else resumen[key].pend++;
   });
   const rowsDoc=Object.values(resumen).sort((a,b)=>b.mes.localeCompare(a.mes)||a.nombre.localeCompare(b.nombre));
-
-  // Por día: filtro por fecha Y sede
-  const baseD=permisos.filter(p=>p.estado==="aprobado"&&
-    (!filtroDia||p.fecha===filtroDia)&&
-    (filtroSedeDia==="todos"||(p.sede||"Sin sede")===filtroSedeDia)
-  );
+  const baseD=permisos.filter(p=>p.estado==="aprobado"&&(!filtroDia||p.fecha===filtroDia)&&(filtroSedeDia==="todos"||(p.sede||"Sin sede")===filtroSedeDia));
   const mapaD={};
-  baseD.forEach(p=>{
-    const key=`${p.fecha}||${p.sede||"Sin sede"}`;
-    if(!mapaD[key]) mapaD[key]={fecha:p.fecha,sede:p.sede||"Sin sede",count:0};
-    mapaD[key].count++;
-  });
+  baseD.forEach(p=>{const key=`${p.fecha}||${p.sede||"Sin sede"}`;if(!mapaD[key])mapaD[key]={fecha:p.fecha,sede:p.sede||"Sin sede",count:0};mapaD[key].count++;});
   const diasAp=Object.values(mapaD).sort((a,b)=>b.fecha.localeCompare(a.fecha)||a.sede.localeCompare(b.sede));
 
   let modalHtml="";
@@ -628,7 +683,7 @@ function renderRector(){
         </select>
       </div>
       <p style="font-size:12px;color:var(--sub);margin-bottom:12px">${pendientesFiltrados.length} solicitud(es)</p>
-      ${pendientesFiltrados.length===0?`<p style="font-size:13px;color:var(--sub)">No hay solicitudes pendientes con estos filtros.</p>`:""}
+      ${pendientesFiltrados.length===0?`<p style="font-size:13px;color:var(--sub)">No hay solicitudes con estos filtros.</p>`:""}
       ${pendientesFiltrados.map(p=>`<div class="perm-row">
         <div>
           <p style="font-weight:500">${p.docenteNombre}</p>
@@ -821,11 +876,7 @@ function bindDocente(){
     if(f.type!=="application/pdf"){setState({fErr:"Solo se permiten archivos PDF.",fOk:""});e.target.value="";return;}
     if(f.size>800*1024){
       setState({fErr:`El archivo pesa ${(f.size/1024).toFixed(0)}KB. Máximo 800KB. Comprime en ilovepdf.com`,fOk:""});
-      e.target.value="";
-      state.form.archivoNombre="";
-      state.form.archivoData="";
-      render();
-      return;
+      e.target.value=""; state.form.archivoNombre=""; state.form.archivoData=""; render(); return;
     }
     const r=new FileReader();
     r.onload=ev=>{state.form.archivoNombre=f.name;state.form.archivoData=ev.target.result;state.fErr="";render();};
@@ -836,7 +887,7 @@ function bindDocente(){
   if(fmd) fmd.onchange=e=>setState({filtroMesDocente:e.target.value});
 }
 
-// ── RENDER PRINCIPAL ──
+// ── RENDER ──
 function render(){
   const {user}=state;
   const root=document.getElementById("app");
