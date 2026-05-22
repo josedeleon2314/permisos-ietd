@@ -191,7 +191,13 @@ async function updatePermiso(id,p) { await updateDoc(doc(db,COL_PERMISOS,String(
 async function saveSysUser(u)      { await setDoc(doc(db,COL_SYSUSERS,u.id),u); }
 async function saveConfig(v)       { await setDoc(doc(db,COL_CONFIG,"settings"),{maxPerDay:v}); state.maxPerDay=v; }
 
-// ── INIT ──
+// ── EVENTO GLOBAL PARA CANCELAR (delegación) ──
+document.addEventListener("click", async function(e) {
+  const btn = e.target.closest(".btn-cancelar-permiso");
+  if (!btn) return;
+  e.stopPropagation();
+  await cancelarPermiso(btn.dataset.id);
+});
 async function init() {
   try {
     await loadSysUsers();
@@ -707,12 +713,6 @@ function bindRector(){
   if(bcd) bcd.onclick=()=>setState({filtroDia:""});
   const fdoc=document.getElementById("fil-docente");
   if(fdoc) fdoc.onchange=e=>setState({filtroDocente:e.target.value});
-  document.querySelectorAll(".btn-cancelar-permiso").forEach(b=>{
-    b.onclick=async(e)=>{
-      e.stopPropagation();
-      await cancelarPermiso(b.dataset.id);
-    };
-  });
   const fmd=document.getElementById("fil-mes-doc");
   if(fmd) fmd.onchange=e=>setState({filtroMesDoc:e.target.value});
 }
