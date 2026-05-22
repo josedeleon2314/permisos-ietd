@@ -290,12 +290,14 @@ async function solicitar() {
 // ── CANCELAR PERMISO (DOCENTE) ──
 async function cancelarPermiso(id) {
   const p = state.permisos.find(x => String(x.id) === String(id));
-  if (!p) return;
+  if (!p) { alert("No se encontró el permiso."); return; }
   const hoy = new Date();
   const hoyStr = `${hoy.getFullYear()}-${String(hoy.getMonth()+1).padStart(2,"0")}-${String(hoy.getDate()).padStart(2,"0")}`;
-  if (p.fecha <= hoyStr) { alert("No puedes cancelar este permiso. Solo puedes cancelar hasta el día anterior a la fecha del permiso."); return; }
+  if (p.fecha <= hoyStr) { alert("No puedes cancelar este permiso. Solo puedes cancelar hasta el día anterior."); return; }
   if (!confirm(`¿Cancelar el permiso del ${fmtDate(p.fecha)}?`)) return;
-  await updatePermiso(id, { estado:"cancelado" });
+  try {
+    await updateDoc(doc(db, COL_PERMISOS, String(p.id)), { estado:"cancelado" });
+  } catch(e) { alert("Error al cancelar. Intenta de nuevo."); console.error(e); }
 }
 
 // ── DECIDIR ──
@@ -708,7 +710,7 @@ function bindRector(){
   document.querySelectorAll(".btn-cancelar-permiso").forEach(b=>{
     b.onclick=async(e)=>{
       e.stopPropagation();
-      await cancelarPermiso(Number(b.dataset.id));
+      await cancelarPermiso(b.dataset.id);
     };
   });
   const fmd=document.getElementById("fil-mes-doc");
