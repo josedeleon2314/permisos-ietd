@@ -123,6 +123,7 @@ let state = {
   excelMsg: { type:"", text:"" }, editMax: false, maxTemp: 5,
   filtroMesDocente:"todos", filtroMesRector:"todos",
   filtroDia:"", filtroDocente:"todos", filtroMesDoc:"todos",
+  filtroSede:"todos",
   loginErr:""
 };
 function setState(p) { Object.assign(state, p); render(); }
@@ -141,8 +142,10 @@ function uniqueMonths(list) {
   return [...new Set(list.map(p=>getMonthKey(p.fecha)))].sort((a,b)=>b.localeCompare(a));
 }
 function badge(estado) {
-  const map={pendiente:"Pendiente",aprobado:"Aprobado",rechazado:"Rechazado"};
-  return `<span class="badge badge-${estado}">${map[estado]||estado}</span>`;
+  const map={pendiente:"Pendiente",aprobado:"Aprobado",rechazado:"Rechazado",cancelado:"Cancelado"};
+  const bgMap={pendiente:"var(--yellow-bg)",aprobado:"var(--green-bg)",rechazado:"var(--red-bg)",cancelado:"#F1F5F9"};
+  const colMap={pendiente:"var(--yellow)",aprobado:"var(--green)",rechazado:"var(--red)",cancelado:"#475569"};
+  return `<span class="badge" style="background:${bgMap[estado]||bgMap.pendiente};color:${colMap[estado]||colMap.pendiente}">${map[estado]||estado}</span>`;
 }
 function rolLabel(r){return{admin:"Administrador",rector:"Rector",docente:"Docente"}[r]||r;}
 
@@ -269,9 +272,9 @@ async function solicitar() {
   if (!form.fecha||!form.motivo.trim()) { setState({fErr:"Completa fecha y motivo."}); return; }
   if (!form.archivoData)               { setState({fErr:"El documento adjunto en PDF es obligatorio."}); return; }
   const mesKey=getMonthKey(form.fecha);
-  const enMes=permisos.filter(p=>p.docenteId===user.id&&getMonthKey(p.fecha)===mesKey&&p.estado!=="rechazado");
+  const enMes=permisos.filter(p=>p.docenteId===user.id&&getMonthKey(p.fecha)===mesKey&&p.estado!=="rechazado"&&p.estado!=="cancelado");
   if (enMes.length>=3) { setState({fErr:"Ya tienes 3 permisos este mes."}); return; }
-  const enDia=permisos.filter(p=>p.fecha===form.fecha&&p.estado!=="rechazado");
+  const enDia=permisos.filter(p=>p.fecha===form.fecha&&p.estado!=="rechazado"&&p.estado!=="cancelado");
   if (enDia.length>=3) { setState({fErr:"Ya hay 3 docentes con permiso ese día."}); return; }
   try {
     const id=Date.now();
@@ -282,6 +285,18 @@ async function solicitar() {
   } catch(err) {
     setState({fErr:"Error al guardar. El archivo puede ser muy grande, comprime el PDF en ilovepdf.com"});
   }
+}
+
+// ── CANCELAR PERMISO (DOCENTE) ──
+async function cancelarPermiso(id) {
+  const p = state.permisos.find(x => x.id === id);
+  if (!p) return;
+  const hoy = new Date(); hoy.setHours(0,0,0,0);
+  const fechaPermiso = new Date(p.fecha + "T00:00:00");
+  const diff = (fechaPermiso - hoy) / (1000*60*60*24);
+  if (diff < 1) { alert("No puedes cancelar este permiso. Solo puedes cancelar hasta el día anterior a la fecha del permiso."); return; }
+  if (!confirm(`¿Cancelar el permiso del ${fmtDate(p.fecha)}?`)) return;
+  await updatePermiso(id, { estado:"cancelado" });
 }
 
 // ── DECIDIR ──
@@ -303,7 +318,7 @@ function derived() {
   const misPermisos=permisos.filter(p=>p.docenteId===user?.id);
   const pendientes =permisos.filter(p=>p.estado==="pendiente").sort((a,b)=>a.ts.localeCompare(b.ts));
   const historialR =permisos.filter(p=>p.estado!=="pendiente");
-  const usadosMes  =user?permisos.filter(p=>p.docenteId===user.id&&getMonthKey(p.fecha)===getMonthKey(new Date().toISOString())&&p.estado!=="rechazado").length:0;
+  const usadosMes  =user?permisos.filter(p=>p.docenteId===user.id&&getMonthKey(p.fecha)===getMonthKey(new Date().toISOString())&&p.estado!=="rechazado"&&p.estado!=="cancelado").length:0;
   return {misPermisos,pendientes,historialR,usadosMes};
 }
 
@@ -501,8 +516,15 @@ function bindAdmin(){
 
 // ── RECTOR ──
 function renderRector(){
-  const {tab,permisos,maxPerDay,modalPermiso,modalObs,modalPw,filtroMesRector,filtroDia,filtroDocente,filtroMesDoc}=state;
+  const {tab,permisos,maxPerDay,modalPermiso,modalObs,modalPw,filtroMesRector,filtroDia,filtroDocente,filtroMesDoc,filtroSede}=state;
   const {pendientes,historialR}=derived();
+
+  // Sedes disponibles
+  const sedesDisp=["todos",...new Set(permisos.map(p=>p.sede||"Sin sede").filter(Boolean))].filter((v,i,a)=>a.indexOf(v)===i);
+
+  // Pendientes filtrados por sede
+  const pendientesFiltrados=filtroSede==="todos"?pendientes:pendientes.filter(p=>(p.sede||"Sin sede")===filtroSede);
+
   const mesesR=uniqueMonths(historialR);
   const histF=filtroMesRector==="todos"?historialR:historialR.filter(p=>getMonthKey(p.fecha)===filtroMesRector);
   const todosP=permisos.filter(p=>p.docenteNombre);
@@ -513,10 +535,11 @@ function renderRector(){
   filtradosDoc.forEach(p=>{
     const mes=getMonthKey(p.fecha);
     const key=`${p.docenteNombre}||${mes}`;
-    if(!resumen[key]) resumen[key]={nombre:p.docenteNombre,sede:p.sede||"—",mes,total:0,aprobados:0,rechazados:0,pend:0};
+    if(!resumen[key]) resumen[key]={nombre:p.docenteNombre,sede:p.sede||"—",mes,total:0,aprobados:0,rechazados:0,pend:0,cancelados:0};
     resumen[key].total++;
     if(p.estado==="aprobado") resumen[key].aprobados++;
     else if(p.estado==="rechazado") resumen[key].rechazados++;
+    else if(p.estado==="cancelado") resumen[key].cancelados++;
     else resumen[key].pend++;
   });
   const rowsDoc=Object.values(resumen).sort((a,b)=>b.mes.localeCompare(a.mes)||a.nombre.localeCompare(b.nombre));
@@ -539,7 +562,7 @@ function renderRector(){
         <p style="color:var(--sub)">Motivo: ${p.motivo}</p>
         ${p.archivoData?`<a href="${p.archivoData}" download="${p.archivoNombre}" style="font-size:12px">📎 Descargar PDF</a>`:""}
         <p style="font-size:12px;margin-top:6px;color:${restantes<=0?"var(--red)":"var(--green)"};font-weight:500">
-          ${restantes<=0?`⚠️ Límite alcanzado (${maxPerDay}/${maxPerDay})`:`Cupos disponibles: ${restantes}`}
+          ${restantes<=0?`⚠️ Límite de sede alcanzado (${maxPerDay}/${maxPerDay})`:`Cupos disponibles en sede: ${restantes}`}
         </p>
       </div>
       <div class="field"><label class="lbl">Observación (opcional)</label>
@@ -562,8 +585,16 @@ function renderRector(){
     </div>
 
     ${tab==="pendientes"?`
-      ${pendientes.length===0?`<p style="font-size:13px;color:var(--sub)">No hay solicitudes pendientes.</p>`:""}
-      ${pendientes.map(p=>`<div class="perm-row">
+      <div class="filtros">
+        <span style="font-size:13px;color:var(--sub)">Sede:</span>
+        <select id="fil-sede" class="inp-sm">
+          <option value="todos">Todas las sedes</option>
+          ${sedesDisp.filter(s=>s!=="todos").map(s=>`<option value="${s}" ${filtroSede===s?"selected":""}>${s}</option>`).join("")}
+        </select>
+        <span style="font-size:12px;color:var(--sub)">${pendientesFiltrados.length} solicitud(es)</span>
+      </div>
+      ${pendientesFiltrados.length===0?`<p style="font-size:13px;color:var(--sub)">No hay solicitudes pendientes.</p>`:""}
+      ${pendientesFiltrados.map(p=>`<div class="perm-row">
         <div>
           <p style="font-weight:500">${p.docenteNombre}</p>
           <p style="font-size:12px;color:var(--sub)">${p.sede?p.sede+" · ":""}${fmtDate(p.fecha)} · ${p.motivo}</p>
@@ -635,7 +666,7 @@ function renderRector(){
       </div>
       <div class="card" style="padding:0;overflow:hidden">
         ${rowsDoc.length===0?`<p style="font-size:13px;color:var(--sub);padding:16px">Sin registros.</p>`:`
-        <table><thead><tr><th>Docente</th><th>Sede</th><th>Mes</th><th>Total</th><th>Aprobados</th><th>Rechazados</th><th>Pendientes</th></tr></thead><tbody>
+        <table><thead><tr><th>Docente</th><th>Sede</th><th>Mes</th><th>Total</th><th>Aprobados</th><th>Rechazados</th><th>Cancelados</th><th>Pendientes</th></tr></thead><tbody>
           ${rowsDoc.map(r=>`<tr>
             <td style="font-weight:500">${r.nombre}</td>
             <td style="color:var(--sub)">${r.sede}</td>
@@ -643,6 +674,7 @@ function renderRector(){
             <td><span style="font-weight:600;color:var(--blue)">${r.total}</span></td>
             <td><span style="color:var(--green);font-weight:500">${r.aprobados}</span></td>
             <td><span style="color:var(--red);font-weight:500">${r.rechazados}</span></td>
+            <td><span style="color:#475569;font-weight:500">${r.cancelados}</span></td>
             <td><span style="color:var(--yellow);font-weight:500">${r.pend}</span></td>
           </tr>`).join("")}
         </tbody></table>`}
@@ -664,6 +696,8 @@ function bindRector(){
   if(bap) bap.onclick=()=>decidir(state.modalPermiso.id,"aprobado");
   if(brj) brj.onclick=()=>decidir(state.modalPermiso.id,"rechazado");
   if(bcl) bcl.onclick=()=>setState({modalPermiso:null});
+  const fsede=document.getElementById("fil-sede");
+  if(fsede) fsede.onchange=e=>setState({filtroSede:e.target.value});
   const fmr=document.getElementById("fil-mes-rector");
   if(fmr) fmr.onchange=e=>setState({filtroMesRector:e.target.value});
   const fdia=document.getElementById("fil-dia");
