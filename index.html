@@ -123,7 +123,8 @@ let state = {
   excelMsg: { type:"", text:"" }, editMax: false, maxTemp: 5,
   filtroMesDocente:"todos", filtroMesRector:"todos",
   filtroDia:"", filtroDocente:"todos", filtroMesDoc:"todos",
-  filtroSede:"todos",
+  filtroSede:"todos", filtroSedeDia:"todos",
+  filtroMesPend:"todos", filtroDocentePend:"todos",
   loginErr:""
 };
 function setState(p) { Object.assign(state, p); render(); }
@@ -523,14 +524,22 @@ function bindAdmin(){
 
 // ── RECTOR ──
 function renderRector(){
-  const {tab,permisos,maxPerDay,modalPermiso,modalObs,modalPw,filtroMesRector,filtroDia,filtroDocente,filtroMesDoc,filtroSede}=state;
+  const {tab,permisos,maxPerDay,modalPermiso,modalObs,modalPw,
+    filtroMesRector,filtroDia,filtroDocente,filtroMesDoc,
+    filtroSede,filtroSedeDia,filtroMesPend,filtroDocentePend}=state;
   const {pendientes,historialR}=derived();
 
-  // Sedes disponibles
-  const sedesDisp=["todos",...new Set(permisos.map(p=>p.sede||"Sin sede").filter(Boolean))].filter((v,i,a)=>a.indexOf(v)===i);
+  // Sedes únicas
+  const todasSedes=[...new Set(permisos.map(p=>p.sede||"Sin sede"))].sort();
 
-  // Pendientes filtrados por sede
-  const pendientesFiltrados=filtroSede==="todos"?pendientes:pendientes.filter(p=>(p.sede||"Sin sede")===filtroSede);
+  // Pendientes con filtros: sede + mes + docente
+  const mesesPend=uniqueMonths(pendientes);
+  const docentesPend=[...new Set(pendientes.map(p=>p.docenteNombre))].sort();
+  const pendientesFiltrados=pendientes.filter(p=>
+    (filtroSede==="todos"||(p.sede||"Sin sede")===filtroSede)&&
+    (filtroMesPend==="todos"||getMonthKey(p.fecha)===filtroMesPend)&&
+    (filtroDocentePend==="todos"||p.docenteNombre===filtroDocentePend)
+  );
 
   const mesesR=uniqueMonths(historialR);
   const histF=filtroMesRector==="todos"?historialR:historialR.filter(p=>getMonthKey(p.fecha)===filtroMesRector);
@@ -550,10 +559,19 @@ function renderRector(){
     else resumen[key].pend++;
   });
   const rowsDoc=Object.values(resumen).sort((a,b)=>b.mes.localeCompare(a.mes)||a.nombre.localeCompare(b.nombre));
-  const baseD=filtroDia?permisos.filter(p=>p.estado==="aprobado"&&p.fecha===filtroDia):permisos.filter(p=>p.estado==="aprobado");
+
+  // Por día: filtro por fecha Y sede
+  const baseD=permisos.filter(p=>p.estado==="aprobado"&&
+    (!filtroDia||p.fecha===filtroDia)&&
+    (filtroSedeDia==="todos"||(p.sede||"Sin sede")===filtroSedeDia)
+  );
   const mapaD={};
-  baseD.forEach(p=>{const key=`${p.fecha}||${p.sede||"Sin sede"}`;if(!mapaD[key])mapaD[key]={fecha:p.fecha,sede:p.sede||"Sin sede",count:0};mapaD[key].count++;});
-  const diasAp=Object.values(mapaD).sort((a,b)=>b.fecha.localeCompare(a.fecha));
+  baseD.forEach(p=>{
+    const key=`${p.fecha}||${p.sede||"Sin sede"}`;
+    if(!mapaD[key]) mapaD[key]={fecha:p.fecha,sede:p.sede||"Sin sede",count:0};
+    mapaD[key].count++;
+  });
+  const diasAp=Object.values(mapaD).sort((a,b)=>b.fecha.localeCompare(a.fecha)||a.sede.localeCompare(b.sede));
 
   let modalHtml="";
   if(modalPermiso){
@@ -596,11 +614,21 @@ function renderRector(){
         <span style="font-size:13px;color:var(--sub)">Sede:</span>
         <select id="fil-sede" class="inp-sm">
           <option value="todos">Todas las sedes</option>
-          ${sedesDisp.filter(s=>s!=="todos").map(s=>`<option value="${s}" ${filtroSede===s?"selected":""}>${s}</option>`).join("")}
+          ${todasSedes.map(s=>`<option value="${s}" ${filtroSede===s?"selected":""}>${s}</option>`).join("")}
         </select>
-        <span style="font-size:12px;color:var(--sub)">${pendientesFiltrados.length} solicitud(es)</span>
+        <span style="font-size:13px;color:var(--sub)">Mes:</span>
+        <select id="fil-mes-pend" class="inp-sm">
+          <option value="todos">Todos los meses</option>
+          ${mesesPend.map(k=>`<option value="${k}" ${filtroMesPend===k?"selected":""}>${getMonthLabel(k)}</option>`).join("")}
+        </select>
+        <span style="font-size:13px;color:var(--sub)">Docente:</span>
+        <select id="fil-docente-pend" class="inp-sm">
+          <option value="todos">Todos</option>
+          ${docentesPend.map(n=>`<option value="${n}" ${filtroDocentePend===n?"selected":""}>${n}</option>`).join("")}
+        </select>
       </div>
-      ${pendientesFiltrados.length===0?`<p style="font-size:13px;color:var(--sub)">No hay solicitudes pendientes.</p>`:""}
+      <p style="font-size:12px;color:var(--sub);margin-bottom:12px">${pendientesFiltrados.length} solicitud(es)</p>
+      ${pendientesFiltrados.length===0?`<p style="font-size:13px;color:var(--sub)">No hay solicitudes pendientes con estos filtros.</p>`:""}
       ${pendientesFiltrados.map(p=>`<div class="perm-row">
         <div>
           <p style="font-weight:500">${p.docenteNombre}</p>
@@ -633,7 +661,12 @@ function renderRector(){
       <div class="filtros">
         <span style="font-size:13px;color:var(--sub)">Fecha:</span>
         <input type="date" id="fil-dia" class="inp-sm" value="${filtroDia}"/>
-        ${filtroDia?`<button class="btn btn-ghost btn-sm" id="btn-clear-dia">Limpiar</button>`:""}
+        <span style="font-size:13px;color:var(--sub)">Sede:</span>
+        <select id="fil-sede-dia" class="inp-sm">
+          <option value="todos">Todas las sedes</option>
+          ${todasSedes.map(s=>`<option value="${s}" ${filtroSedeDia===s?"selected":""}>${s}</option>`).join("")}
+        </select>
+        ${filtroDia||filtroSedeDia!=="todos"?`<button class="btn btn-ghost btn-sm" id="btn-clear-dia">Limpiar</button>`:""}
       </div>
       <div class="card" style="padding:0;overflow:hidden">
         <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
@@ -705,12 +738,18 @@ function bindRector(){
   if(bcl) bcl.onclick=()=>setState({modalPermiso:null});
   const fsede=document.getElementById("fil-sede");
   if(fsede) fsede.onchange=e=>setState({filtroSede:e.target.value});
+  const fmp=document.getElementById("fil-mes-pend");
+  if(fmp) fmp.onchange=e=>setState({filtroMesPend:e.target.value});
+  const fdp=document.getElementById("fil-docente-pend");
+  if(fdp) fdp.onchange=e=>setState({filtroDocentePend:e.target.value});
   const fmr=document.getElementById("fil-mes-rector");
   if(fmr) fmr.onchange=e=>setState({filtroMesRector:e.target.value});
   const fdia=document.getElementById("fil-dia");
   if(fdia) fdia.onchange=e=>setState({filtroDia:e.target.value});
+  const fsdd=document.getElementById("fil-sede-dia");
+  if(fsdd) fsdd.onchange=e=>setState({filtroSedeDia:e.target.value});
   const bcd=document.getElementById("btn-clear-dia");
-  if(bcd) bcd.onclick=()=>setState({filtroDia:""});
+  if(bcd) bcd.onclick=()=>setState({filtroDia:"",filtroSedeDia:"todos"});
   const fdoc=document.getElementById("fil-docente");
   if(fdoc) fdoc.onchange=e=>setState({filtroDocente:e.target.value});
   const fmd=document.getElementById("fil-mes-doc");
