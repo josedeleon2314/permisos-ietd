@@ -147,15 +147,16 @@ function badge(estado) {
   const colMap={pendiente:"var(--yellow)",aprobado:"var(--green)",rechazado:"var(--red)",cancelado:"#475569"};
   return `<span class="badge" style="background:${bgMap[estado]||bgMap.pendiente};color:${colMap[estado]||colMap.pendiente}">${map[estado]||estado}</span>`;
 }
-function rolLabel(r){return{admin:"Administrador",rector:"Rector",docente:"Docente"}[r]||r;}
+function rolLabel(r){return{admin:"Administrador",rector:"Rector",docente:"Docente",coordinador:"Coordinador"}[r]||r;}
 
 // ── FIREBASE ──
 async function loadSysUsers() {
   const snap = await getDocs(collection(db,COL_SYSUSERS));
   if (snap.empty) {
     const defaults = [
-      {id:"admin", nombre:"Administrador",   rol:"admin",  password:"admin123",  documento:"admin",  sede:""},
-      {id:"rector",nombre:"Rector Principal",rol:"rector", password:"rector123", documento:"rector", sede:""}
+      {id:"admin", nombre:"Administrador",   rol:"admin",       password:"admin123",  documento:"admin",       sede:""},
+      {id:"rector",nombre:"Rector Principal",rol:"rector",      password:"rector123", documento:"rector",      sede:""},
+      {id:"coord", nombre:"Coordinador",     rol:"coordinador", password:"coord123",  documento:"coordinador", sede:""}
     ];
     for (const u of defaults) await setDoc(doc(db,COL_SYSUSERS,u.id),u);
     state.sysUsers = defaults;
@@ -591,6 +592,190 @@ function bindAdmin(){
   });
 }
 
+// ── COORDINADOR (solo lectura) ──
+function renderCoord(){
+  const {tab,permisos,maxPerDay,modalPw,
+    filtroMesRector,filtroDia,filtroDocente,filtroMesDoc,
+    filtroSede,filtroSedeDia,filtroMesPend,filtroDocentePend}=state;
+  const {pendientes,historialR}=derived();
+  const todasSedes=[...new Set(permisos.map(p=>p.sede||"Sin sede"))].sort();
+  const mesesPend=uniqueMonths(pendientes);
+  const docentesPend=[...new Set(pendientes.map(p=>p.docenteNombre))].sort();
+  const pendientesFiltrados=pendientes.filter(p=>
+    (filtroSede==="todos"||(p.sede||"Sin sede")===filtroSede)&&
+    (filtroMesPend==="todos"||getMonthKey(p.fecha)===filtroMesPend)&&
+    (filtroDocentePend==="todos"||p.docenteNombre===filtroDocentePend)
+  );
+  const mesesR=uniqueMonths(historialR);
+  const histF=filtroMesRector==="todos"?historialR:historialR.filter(p=>getMonthKey(p.fecha)===filtroMesRector);
+  const todosP=permisos.filter(p=>p.docenteNombre);
+  const docNames=[...new Set(todosP.map(p=>p.docenteNombre))].sort();
+  const mesesDocAll=uniqueMonths(todosP);
+  const filtradosDoc=todosP.filter(p=>(filtroDocente==="todos"||p.docenteNombre===filtroDocente)&&(filtroMesDoc==="todos"||getMonthKey(p.fecha)===filtroMesDoc));
+  const resumen={};
+  filtradosDoc.forEach(p=>{
+    const mes=getMonthKey(p.fecha);
+    const key=`${p.docenteNombre}||${mes}`;
+    if(!resumen[key]) resumen[key]={nombre:p.docenteNombre,sede:p.sede||"—",mes,total:0,aprobados:0,rechazados:0,pend:0,cancelados:0};
+    resumen[key].total++;
+    if(p.estado==="aprobado") resumen[key].aprobados++;
+    else if(p.estado==="rechazado") resumen[key].rechazados++;
+    else if(p.estado==="cancelado") resumen[key].cancelados++;
+    else resumen[key].pend++;
+  });
+  const rowsDoc=Object.values(resumen).sort((a,b)=>b.mes.localeCompare(a.mes)||a.nombre.localeCompare(b.nombre));
+  const baseD=permisos.filter(p=>p.estado==="aprobado"&&(!filtroDia||p.fecha===filtroDia)&&(filtroSedeDia==="todos"||(p.sede||"Sin sede")===filtroSedeDia));
+  const mapaD={};
+  baseD.forEach(p=>{const key=`${p.fecha}||${p.sede||"Sin sede"}`;if(!mapaD[key])mapaD[key]={fecha:p.fecha,sede:p.sede||"Sin sede",count:0};mapaD[key].count++;});
+  const diasAp=Object.values(mapaD).sort((a,b)=>b.fecha.localeCompare(a.fecha)||a.sede.localeCompare(b.sede));
+
+  return`${topbarHtml()}
+  <div class="page">
+    <div class="stat-grid">
+      ${[["Pendientes",pendientes.length],["Aprobados",permisos.filter(p=>p.estado==="aprobado").length],["Rechazados",permisos.filter(p=>p.estado==="rechazado").length]]
+        .map(([l,v])=>`<div class="stat"><p class="stat-label">${l}</p><p class="stat-val">${v}</p></div>`).join("")}
+    </div>
+    <div class="tabs">
+      ${[["pendientes",`Pendientes (${pendientes.length})`],["historial","Historial"],["por-dia","Por día"],["por-docente","Por docente"]]
+        .map(([t,l])=>`<button class="tab ${tab===t?"active":""}" data-tab="${t}">${l}</button>`).join("")}
+    </div>
+
+    ${tab==="pendientes"?`
+      <div class="filtros">
+        <span style="font-size:13px;color:var(--sub)">Sede:</span>
+        <select id="fil-sede" class="inp-sm">
+          <option value="todos">Todas las sedes</option>
+          ${todasSedes.map(s=>`<option value="${s}" ${filtroSede===s?"selected":""}>${s}</option>`).join("")}
+        </select>
+        <span style="font-size:13px;color:var(--sub)">Mes:</span>
+        <select id="fil-mes-pend" class="inp-sm">
+          <option value="todos">Todos los meses</option>
+          ${mesesPend.map(k=>`<option value="${k}" ${filtroMesPend===k?"selected":""}>${getMonthLabel(k)}</option>`).join("")}
+        </select>
+        <span style="font-size:13px;color:var(--sub)">Docente:</span>
+        <select id="fil-docente-pend" class="inp-sm">
+          <option value="todos">Todos</option>
+          ${docentesPend.map(n=>`<option value="${n}" ${filtroDocentePend===n?"selected":""}>${n}</option>`).join("")}
+        </select>
+      </div>
+      <p style="font-size:12px;color:var(--sub);margin-bottom:12px">${pendientesFiltrados.length} solicitud(es)</p>
+      ${pendientesFiltrados.length===0?`<p style="font-size:13px;color:var(--sub)">No hay solicitudes con estos filtros.</p>`:""}
+      ${pendientesFiltrados.map(p=>`<div class="perm-row">
+        <div>
+          <p style="font-weight:500">${p.docenteNombre}</p>
+          <p style="font-size:12px;color:var(--sub)">${p.sede?p.sede+" · ":""}${fmtDate(p.fecha)} · ${p.motivo}</p>
+          ${p.archivoData?`<a href="${p.archivoData}" download="${p.archivoNombre}" style="font-size:11px">Ver PDF</a>`:""}
+        </div>
+        ${badge("pendiente")}
+      </div>`).join("")}`:""}
+
+    ${tab==="historial"?`
+      <div class="filtros">
+        <span style="font-size:13px;color:var(--sub)">Mes:</span>
+        <select id="fil-mes-rector" class="inp-sm">
+          <option value="todos">Todos los meses</option>
+          ${mesesR.map(k=>`<option value="${k}" ${filtroMesRector===k?"selected":""}>${getMonthLabel(k)}</option>`).join("")}
+        </select>
+        <span style="font-size:12px;color:var(--sub)">${histF.length} registro(s)</span>
+      </div>
+      ${histF.length===0?`<p style="font-size:13px;color:var(--sub)">Sin registros.</p>`:""}
+      ${histF.map(p=>`<div class="perm-row">
+        <div>
+          <p style="font-weight:500">${p.docenteNombre}</p>
+          <p style="font-size:12px;color:var(--sub)">${p.sede?p.sede+" · ":""}${fmtDate(p.fecha)} · ${p.motivo}</p>
+          ${p.observacion?`<p style="font-size:11px;color:var(--sub)">Obs: ${p.observacion}</p>`:""}
+          ${p.archivoData?`<a href="${p.archivoData}" download="${p.archivoNombre}" style="font-size:11px">Ver PDF</a>`:""}
+        </div>${badge(p.estado)}
+      </div>`).join("")}`:""}
+
+    ${tab==="por-dia"?`
+      <div class="filtros">
+        <span style="font-size:13px;color:var(--sub)">Fecha:</span>
+        <input type="date" id="fil-dia" class="inp-sm" value="${filtroDia}"/>
+        <span style="font-size:13px;color:var(--sub)">Sede:</span>
+        <select id="fil-sede-dia" class="inp-sm">
+          <option value="todos">Todas las sedes</option>
+          ${todasSedes.map(s=>`<option value="${s}" ${filtroSedeDia===s?"selected":""}>${s}</option>`).join("")}
+        </select>
+        ${filtroDia||filtroSedeDia!=="todos"?`<button class="btn btn-ghost btn-sm" id="btn-clear-dia">Limpiar</button>`:""}
+      </div>
+      <div class="card" style="padding:0;overflow:hidden">
+        <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+          <p style="font-size:13px;font-weight:500">Aprobados por día y sede</p>
+          <span class="badge" style="background:var(--blue-light);color:var(--blue)">Límite: ${maxPerDay}/día/sede</span>
+        </div>
+        ${diasAp.length===0?`<p style="font-size:13px;color:var(--sub);padding:16px">Sin registros.</p>`:`
+        <table><thead><tr><th>Fecha</th><th>Sede</th><th>Aprobados</th><th>Estado</th></tr></thead><tbody>
+          ${diasAp.map(r=>{
+            const pct=r.count/maxPerDay;
+            const col=pct>=1?"var(--red)":pct>=0.8?"var(--yellow)":"var(--green)";
+            const bgc=pct>=1?"var(--red-bg)":pct>=0.8?"var(--yellow-bg)":"var(--green-bg)";
+            return`<tr>
+              <td>${fmtDate(r.fecha)}</td><td style="color:var(--sub)">${r.sede}</td>
+              <td><div style="display:flex;align-items:center;gap:8px">
+                <div class="prog-wrap"><div class="prog-bar" style="width:${Math.min(pct*100,100)}%;background:${col}"></div></div>
+                <span style="font-weight:500">${r.count}/${maxPerDay}</span>
+              </div></td>
+              <td><span class="badge" style="background:${bgc};color:${col}">${pct>=1?"Límite alcanzado":pct>=0.8?"Casi lleno":"Disponible"}</span></td>
+            </tr>`;}).join("")}
+        </tbody></table>`}
+      </div>`:""}
+
+    ${tab==="por-docente"?`
+      <div class="filtros">
+        <span style="font-size:13px;color:var(--sub)">Docente:</span>
+        <select id="fil-docente" class="inp-sm">
+          <option value="todos">Todos</option>
+          ${docNames.map(n=>`<option value="${n}" ${filtroDocente===n?"selected":""}>${n}</option>`).join("")}
+        </select>
+        <span style="font-size:13px;color:var(--sub)">Mes:</span>
+        <select id="fil-mes-doc" class="inp-sm">
+          <option value="todos">Todos</option>
+          ${mesesDocAll.map(k=>`<option value="${k}" ${filtroMesDoc===k?"selected":""}>${getMonthLabel(k)}</option>`).join("")}
+        </select>
+        <span style="font-size:12px;color:var(--sub)">${rowsDoc.length} registro(s)</span>
+      </div>
+      <div class="card" style="padding:0;overflow:hidden">
+        ${rowsDoc.length===0?`<p style="font-size:13px;color:var(--sub);padding:16px">Sin registros.</p>`:`
+        <table><thead><tr><th>Docente</th><th>Sede</th><th>Mes</th><th>Total</th><th>Aprobados</th><th>Rechazados</th><th>Cancelados</th><th>Pendientes</th></tr></thead><tbody>
+          ${rowsDoc.map(r=>`<tr>
+            <td style="font-weight:500">${r.nombre}</td>
+            <td style="color:var(--sub)">${r.sede}</td>
+            <td style="color:var(--sub);text-transform:capitalize">${getMonthLabel(r.mes)}</td>
+            <td><span style="font-weight:600;color:var(--blue)">${r.total}</span></td>
+            <td><span style="color:var(--green);font-weight:500">${r.aprobados}</span></td>
+            <td><span style="color:var(--red);font-weight:500">${r.rechazados}</span></td>
+            <td><span style="color:#475569;font-weight:500">${r.cancelados}</span></td>
+            <td><span style="color:var(--yellow);font-weight:500">${r.pend}</span></td>
+          </tr>`).join("")}
+        </tbody></table>`}
+      </div>`:""}
+  </div>
+  ${modalPwHtml()}`;}
+
+function bindCoord(){
+  bindTopbar(); bindModalPw();
+  document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>setState({tab:b.dataset.tab}));
+  const fsede=document.getElementById("fil-sede");
+  if(fsede) fsede.onchange=e=>setState({filtroSede:e.target.value});
+  const fmp=document.getElementById("fil-mes-pend");
+  if(fmp) fmp.onchange=e=>setState({filtroMesPend:e.target.value});
+  const fdp=document.getElementById("fil-docente-pend");
+  if(fdp) fdp.onchange=e=>setState({filtroDocentePend:e.target.value});
+  const fmr=document.getElementById("fil-mes-rector");
+  if(fmr) fmr.onchange=e=>setState({filtroMesRector:e.target.value});
+  const fdia=document.getElementById("fil-dia");
+  if(fdia) fdia.onchange=e=>setState({filtroDia:e.target.value});
+  const fsdd=document.getElementById("fil-sede-dia");
+  if(fsdd) fsdd.onchange=e=>setState({filtroSedeDia:e.target.value});
+  const bcd=document.getElementById("btn-clear-dia");
+  if(bcd) bcd.onclick=()=>setState({filtroDia:"",filtroSedeDia:"todos"});
+  const fdoc=document.getElementById("fil-docente");
+  if(fdoc) fdoc.onchange=e=>setState({filtroDocente:e.target.value});
+  const fmd=document.getElementById("fil-mes-doc");
+  if(fmd) fmd.onchange=e=>setState({filtroMesDoc:e.target.value});
+}
+
 // ── RECTOR ──
 function renderRector(){
   const {tab,permisos,maxPerDay,modalPermiso,modalObs,modalPw,
@@ -892,9 +1077,10 @@ function render(){
   const {user}=state;
   const root=document.getElementById("app");
   if(!user){root.innerHTML=renderLogin();bindLogin();return;}
-  if(user.rol==="admin") {root.innerHTML=renderAdmin(); bindAdmin(); }
-  if(user.rol==="rector"){root.innerHTML=renderRector();bindRector();}
-  if(user.rol==="docente"){root.innerHTML=renderDocente();bindDocente();}
+  if(user.rol==="admin")        {root.innerHTML=renderAdmin();       bindAdmin();   }
+  if(user.rol==="rector")       {root.innerHTML=renderRector();      bindRector();  }
+  if(user.rol==="coordinador")  {root.innerHTML=renderCoord();       bindCoord();   }
+  if(user.rol==="docente")      {root.innerHTML=renderDocente();     bindDocente(); }
 }
 </script>
 </body>
