@@ -235,7 +235,7 @@ document.addEventListener("click", async function(e) {
 function login() {
   const documento = document.getElementById("inp-doc").value.trim();
   const password  = document.getElementById("inp-pass").value;
-  // Buscar en sysUsers, docentes y coordinadores
+      // Login: buscar en sysUsers, docentes Y coordinadores
   const u = [...state.sysUsers, ...state.docentes, ...state.coordinadores]
     .find(u=>u.documento===documento && u.password===password);
   if (!u) { setState({loginErr:"Documento o contraseña incorrectos."}); return; }
@@ -394,8 +394,8 @@ async function solicitar() {
   const mesKey=getMonthKey(form.fecha);
   const enMes=permisos.filter(p=>p.docenteId===user.id&&getMonthKey(p.fecha)===mesKey&&p.estado!=="rechazado"&&p.estado!=="cancelado");
   if (enMes.length>=3) { setState({fErr:"Ya tienes 3 permisos este mes."}); return; }
-  const enDia=permisos.filter(p=>p.fecha===form.fecha&&p.estado!=="rechazado"&&p.estado!=="cancelado");
-  if (enDia.length>=3) { setState({fErr:"Ya hay 3 docentes con permiso ese día."}); return; }
+  const enDia=permisos.filter(p=>p.fecha===form.fecha&&(p.estado==="pendiente"||p.estado==="aprobado")&&(p.sede||"")===(user.sede||""));
+  if (enDia.length>=state.maxPerDay) { setState({fErr:`Para el ${fmtDate(form.fecha)} ya no se pueden realizar más solicitudes en tu sede (límite de ${state.maxPerDay} alcanzado).`}); return; }
   try {
     const id=Date.now();
     await savePermiso({id,docenteId:user.id,docenteNombre:user.nombre,sede:user.sede||"",
@@ -560,20 +560,26 @@ function modalCoordHtml(){
     </div></div></div>`;}
 function bindModalCoord(){
   if(!state.modalCoord) return;
-  document.getElementById("cf-nombre").oninput=e=>{state.coordForm.nombre=e.target.value;};
-  document.getElementById("cf-doc").oninput=e=>{state.coordForm.documento=e.target.value;};
-  document.getElementById("cf-pw").oninput=e=>{state.coordForm.password=e.target.value;};
+  const cfNombre=document.getElementById("cf-nombre");
+  const cfDoc=document.getElementById("cf-doc");
+  const cfPw=document.getElementById("cf-pw");
+  if(cfNombre) cfNombre.oninput=e=>{state.coordForm.nombre=e.target.value;};
+  if(cfDoc) cfDoc.oninput=e=>{state.coordForm.documento=e.target.value;};
+  if(cfPw) cfPw.oninput=e=>{state.coordForm.password=e.target.value;};
   document.querySelectorAll(".sede-chip").forEach(chip=>{
-    chip.onclick=()=>{
+    chip.onclick=e=>{
+      e.preventDefault();
       const sede=chip.dataset.sede;
       const idx=state.coordForm.sedes.indexOf(sede);
       if(idx>=0) state.coordForm.sedes.splice(idx,1);
       else state.coordForm.sedes.push(sede);
-      chip.classList.toggle("selected");
+      chip.classList.toggle("selected", state.coordForm.sedes.includes(sede));
     };
   });
-  document.getElementById("btn-coord-save").onclick=guardarCoord;
-  document.getElementById("btn-coord-cancel").onclick=()=>setState({modalCoord:false,editCoord:null,coordErr:"",coordOk:""});
+  const bcs=document.getElementById("btn-coord-save");
+  const bcc=document.getElementById("btn-coord-cancel");
+  if(bcs) bcs.onclick=guardarCoord;
+  if(bcc) bcc.onclick=()=>setState({modalCoord:false,editCoord:null,coordErr:"",coordOk:""});
 }
 
 // ── LOGIN ──
@@ -960,7 +966,11 @@ function bindAdmin(){
   const bmc=document.getElementById("btn-max-cancel");
   if(bmc) bmc.onclick=()=>setState({editMax:false});
   const bnc=document.getElementById("btn-nuevo-coord");
-  if(bnc) bnc.onclick=()=>setState({modalCoord:true,editCoord:null,coordForm:{nombre:"",documento:"",password:"",sedes:[]},coordErr:"",coordOk:""});
+  if(bnc) bnc.onclick=async()=>{
+    // Recargar docentes para tener sedes actualizadas
+    await loadDocentes();
+    setState({modalCoord:true,editCoord:null,coordForm:{nombre:"",documento:"",password:"",sedes:[]},coordErr:"",coordOk:""});
+  };
   document.querySelectorAll(".btn-edit-coord").forEach(b=>{
     b.onclick=()=>{
       const c=state.coordinadores.find(x=>x.id===b.dataset.id);
