@@ -29,7 +29,7 @@
     .topbar { background: var(--white); border-bottom: 1px solid var(--border); padding: 0 24px; height: 56px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 10; }
     .topbar-left { display: flex; align-items: center; gap: 10px; }
     .topbar-icon { width: 32px; height: 32px; border-radius: 8px; background: var(--blue-light); display: flex; align-items: center; justify-content: center; }
-    .topbar-right { display: flex; align-items: center; gap: 10px; }
+    .topbar-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
     .page { max-width: 760px; margin: 0 auto; padding: 28px 20px; }
     .card { background: var(--white); border: 1px solid var(--border); border-radius: 12px; padding: 20px 22px; margin-bottom: 20px; }
     .stat-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 12px; margin-bottom: 24px; }
@@ -59,8 +59,8 @@
     .perm-row { background: var(--white); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
     .filtros { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
     .inp-sm { padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); font-size: 13px; background: var(--white); color: var(--text); outline: none; }
-    .overlay { position: fixed; inset: 0; background: rgba(15,23,42,0.4); display: flex; align-items: center; justify-content: center; z-index: 999; }
-    .modal { background: var(--white); border-radius: 14px; padding: 24px; width: 90%; max-width: 420px; border: 1px solid var(--border); }
+    .overlay { position: fixed; inset: 0; background: rgba(15,23,42,0.4); display: flex; align-items: center; justify-content: center; z-index: 999; padding: 1rem; }
+    .modal { background: var(--white); border-radius: 14px; padding: 24px; width: 90%; max-width: 460px; border: 1px solid var(--border); max-height: 90vh; overflow-y: auto; }
     .modal h3 { font-size: 15px; font-weight: 500; margin-bottom: 16px; }
     .modal-info { background: var(--blue-light); border-radius: 8px; padding: 12px 14px; margin-bottom: 16px; font-size: 13px; }
     .modal-info p { margin-bottom: 3px; }
@@ -82,6 +82,10 @@
     .required { color: var(--red); }
     .edit-max-row { display: flex; align-items: center; gap: 12px; }
     .big-num { font-size: 28px; font-weight: 500; color: var(--blue); }
+    .sede-check { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+    .sede-chip { display: flex; align-items: center; gap: 6px; background: var(--blue-light); border: 1px solid var(--blueMid, #BFDBFE); border-radius: 20px; padding: 4px 12px; font-size: 12px; cursor: pointer; user-select: none; }
+    .sede-chip.selected { background: var(--blue); color: #fff; }
+    .sede-chip input { display: none; }
   </style>
 </head>
 <body>
@@ -104,21 +108,24 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db  = getFirestore(app);
 
-const COL_DOCENTES = "docentes";
-const COL_PERMISOS = "permisos";
-const COL_CONFIG   = "config";
-const COL_SYSUSERS = "sysusers";
+const COL_DOCENTES  = "docentes";
+const COL_PERMISOS  = "permisos";
+const COL_CONFIG    = "config";
+const COL_SYSUSERS  = "sysusers";
+const COL_COORDS    = "coordinadores";
 
 let state = {
-  user: null, sysUsers: [], docentes: [], permisos: [], maxPerDay: 5,
+  user: null, sysUsers: [], docentes: [], permisos: [], coordinadores: [], maxPerDay: 5,
   tab: "pendientes", modalPermiso: null, modalObs: "",
   modalPw: false, modalReset: null,
+  modalCoord: false, editCoord: null,
+  coordForm: { nombre:"", documento:"", password:"", sedes:[] },
+  coordErr: "", coordOk: "",
   form: { fecha:"", motivo:"", archivoNombre:"", archivoData:"" },
   fErr:"", fOk:"",
   pw: { actual:"", nueva:"", confirmar:"" }, pwErr:"", pwOk:"",
   resetPw: { nueva:"", confirmar:"" }, resetErr:"", resetOk:"",
-  excelMsg: { type:"", text:"" },
-  permisosMsg: { type:"", text:"" },
+  excelMsg: { type:"", text:"" }, permisosMsg: { type:"", text:"" },
   editMax: false, maxTemp: 5,
   filtroMesDocente:"todos", filtroMesRector:"todos",
   filtroDia:"", filtroDocente:"todos", filtroMesDoc:"todos",
@@ -149,14 +156,18 @@ function badge(estado) {
 }
 function rolLabel(r){return{admin:"Administrador",rector:"Rector",docente:"Docente",coordinador:"Coordinador"}[r]||r;}
 
+// Sedes únicas del sistema
+function todasSedesDisp() {
+  return [...new Set(state.docentes.map(d=>d.sede||"Sin sede").filter(Boolean))].sort();
+}
+
 // ── FIREBASE ──
 async function loadSysUsers() {
   const snap = await getDocs(collection(db,COL_SYSUSERS));
   if (snap.empty) {
     const defaults = [
-      {id:"admin", nombre:"Administrador",   rol:"admin",       password:"admin123",  documento:"admin",       sede:""},
-      {id:"rector",nombre:"Rector Principal",rol:"rector",      password:"rector123", documento:"rector",      sede:""},
-      {id:"coord", nombre:"Coordinador",     rol:"coordinador", password:"coord123",  documento:"coordinador", sede:""}
+      {id:"admin", nombre:"Administrador",   rol:"admin",  password:"admin123",  documento:"admin",  sede:""},
+      {id:"rector",nombre:"Rector Principal",rol:"rector", password:"rector123", documento:"rector", sede:""}
     ];
     for (const u of defaults) await setDoc(doc(db,COL_SYSUSERS,u.id),u);
     state.sysUsers = defaults;
@@ -167,6 +178,10 @@ async function loadSysUsers() {
 async function loadDocentes() {
   const snap = await getDocs(collection(db,COL_DOCENTES));
   state.docentes = snap.docs.map(d=>d.data());
+}
+async function loadCoordinadores() {
+  const snap = await getDocs(collection(db,COL_COORDS));
+  state.coordinadores = snap.docs.map(d=>d.data());
 }
 async function loadConfig() {
   try {
@@ -197,6 +212,7 @@ async function init() {
   try {
     await loadSysUsers();
     await loadDocentes();
+    await loadCoordinadores();
     await loadConfig();
     listenPermisos();
     render();
@@ -219,7 +235,9 @@ document.addEventListener("click", async function(e) {
 function login() {
   const documento = document.getElementById("inp-doc").value.trim();
   const password  = document.getElementById("inp-pass").value;
-  const u = [...state.sysUsers,...state.docentes].find(u=>u.documento===documento&&u.password===password);
+  // Buscar en sysUsers, docentes y coordinadores
+  const u = [...state.sysUsers, ...state.docentes, ...state.coordinadores]
+    .find(u=>u.documento===documento && u.password===password);
   if (!u) { setState({loginErr:"Documento o contraseña incorrectos."}); return; }
   setState({user:u, loginErr:""});
 }
@@ -233,19 +251,49 @@ async function cambiarPw() {
   if (pw.nueva!==pw.confirmar)   { setState({pwErr:"Las contraseñas no coinciden.",pwOk:""}); return; }
   const updated={...user,password:pw.nueva};
   if (user.rol==="docente") { await setDoc(doc(db,COL_DOCENTES,user.id),updated); state.docentes=state.docentes.map(d=>d.id===user.id?updated:d); }
+  else if (user.rol==="coordinador") { await setDoc(doc(db,COL_COORDS,user.id),updated); state.coordinadores=state.coordinadores.map(c=>c.id===user.id?updated:c); }
   else { await saveSysUser(updated); state.sysUsers=state.sysUsers.map(s=>s.id===user.id?updated:s); }
   setState({user:updated,pw:{actual:"",nueva:"",confirmar:""},pwErr:"",pwOk:"Contraseña actualizada."});
 }
 async function resetearPw() {
   const {resetPw,modalReset}=state;
-  if (resetPw.nueva.length<4)           { setState({resetErr:"Mínimo 4 caracteres.",resetOk:""}); return; }
-  if (resetPw.nueva!==resetPw.confirmar){ setState({resetErr:"Las contraseñas no coinciden.",resetOk:""}); return; }
-  const target=[...state.sysUsers,...state.docentes].find(u=>u.id===modalReset);
+  if (resetPw.nueva.length<4)            { setState({resetErr:"Mínimo 4 caracteres.",resetOk:""}); return; }
+  if (resetPw.nueva!==resetPw.confirmar) { setState({resetErr:"Las contraseñas no coinciden.",resetOk:""}); return; }
+  const allU=[...state.sysUsers,...state.docentes,...state.coordinadores];
+  const target=allU.find(u=>u.id===modalReset);
   if (!target) return;
   const updated={...target,password:resetPw.nueva};
   if (target.rol==="docente") { await setDoc(doc(db,COL_DOCENTES,target.id),updated); state.docentes=state.docentes.map(d=>d.id===target.id?updated:d); }
+  else if (target.rol==="coordinador") { await setDoc(doc(db,COL_COORDS,target.id),updated); state.coordinadores=state.coordinadores.map(c=>c.id===target.id?updated:c); }
   else { await saveSysUser(updated); state.sysUsers=state.sysUsers.map(s=>s.id===target.id?updated:s); }
   setState({resetPw:{nueva:"",confirmar:""},resetErr:"",resetOk:`Contraseña de ${target.nombre} actualizada.`});
+}
+
+// ── COORDINADORES CRUD ──
+async function guardarCoord() {
+  const {coordForm, editCoord} = state;
+  if (!coordForm.nombre.trim()||!coordForm.documento.trim()||!coordForm.password.trim()) {
+    setState({coordErr:"Completa nombre, documento y contraseña.",coordOk:""}); return;
+  }
+  if (coordForm.sedes.length===0) { setState({coordErr:"Selecciona al menos una sede.",coordOk:""}); return; }
+  const id = editCoord ? editCoord.id : `coord_${coordForm.documento.trim()}_${Date.now()}`;
+  const coord = {
+    id, nombre:coordForm.nombre.trim(), documento:coordForm.documento.trim(),
+    password:coordForm.password.trim(), rol:"coordinador", sedes:coordForm.sedes, sede:""
+  };
+  await setDoc(doc(db,COL_COORDS,id),coord);
+  if (editCoord) {
+    state.coordinadores=state.coordinadores.map(c=>c.id===id?coord:c);
+  } else {
+    state.coordinadores=[...state.coordinadores,coord];
+  }
+  setState({modalCoord:false,editCoord:null,coordForm:{nombre:"",documento:"",password:"",sedes:[]},coordErr:"",coordOk:""});
+}
+async function eliminarCoord(id) {
+  if (!confirm("¿Eliminar este coordinador?")) return;
+  await deleteDoc(doc(db,COL_COORDS,id));
+  state.coordinadores=state.coordinadores.filter(c=>c.id!==id);
+  render();
 }
 
 // ── EXCEL DOCENTES ──
@@ -283,18 +331,15 @@ async function handleExcelPermisos(e) {
     try {
       const wb=XLSX.read(new Uint8Array(ev.target.result),{type:"array"});
       let totalCargados=0, totalErrores=0;
-
       for (const sheetName of wb.SheetNames) {
         const ws=wb.Sheets[sheetName];
         const rows=XLSX.utils.sheet_to_json(ws,{defval:""});
         for (const row of rows) {
           const documento=String(row["DOCUMENTO"]||row["documento"]||"").trim();
-          const nombre   =String(row["NOMBRE"]   ||row["nombre"]   ||row["NOMBRES"]||row["nombres"]||"").trim();
-          const sede     =String(row["SEDE"]      ||row["sede"]     ||"").trim();
+          const nombre   =String(row["NOMBRE"]   ||row["nombre"]  ||row["NOMBRES"]||row["nombres"]||"").trim();
+          const sede     =String(row["SEDE"]     ||row["sede"]    ||"").trim();
           const fechaRaw =row["FECHA"]||row["fecha"]||"";
           if (!documento||!nombre||!fechaRaw) { totalErrores++; continue; }
-
-          // Parsear fecha
           let fecha="";
           if (typeof fechaRaw==="number") {
             const d=new Date(Math.round((fechaRaw-25569)*86400*1000));
@@ -303,35 +348,26 @@ async function handleExcelPermisos(e) {
             const str=String(fechaRaw).trim();
             if (str.includes("/")) {
               const parts=str.split("/");
-              if (parts.length===3) {
-                const [d,m,y]=parts;
-                fecha=`${y.padStart(4,"0")}-${m.padStart(2,"0")}-${d.padStart(2,"0")}`;
-              }
-            } else if (str.includes("-")) {
-              fecha=str.substring(0,10);
-            }
+              if (parts.length===3) { const [d,m,y]=parts; fecha=`${y.padStart(4,"0")}-${m.padStart(2,"0")}-${d.padStart(2,"0")}`; }
+            } else if (str.includes("-")) { fecha=str.substring(0,10); }
           }
           if (!fecha||fecha.length!==10) { totalErrores++; continue; }
-
           const docente=state.docentes.find(d=>d.documento===documento);
           const docenteId=docente?docente.id:`doc_${documento}`;
           const id=`hist_${documento}_${fecha}_${Math.floor(Math.random()*9999)}`;
           await setDoc(doc(db,COL_PERMISOS,id),{
-            id, docenteId, docenteNombre:nombre, sede, fecha,
+            id,docenteId,docenteNombre:nombre,sede,fecha,
             motivo:"Permiso cargado por administrador",
-            archivoNombre:null, archivoData:null,
-            estado:"aprobado", observacion:`Histórico - ${sheetName}`,
-            ts:new Date().toISOString(), historico:true
+            archivoNombre:null,archivoData:null,
+            estado:"aprobado",observacion:`Histórico - ${sheetName}`,
+            ts:new Date().toISOString(),historico:true
           });
           totalCargados++;
           await new Promise(r=>setTimeout(r,80));
         }
       }
       setState({permisosMsg:{type:"ok",text:`✓ ${totalCargados} permiso(s) cargado(s) en ${wb.SheetNames.length} hoja(s).${totalErrores>0?` ${totalErrores} fila(s) omitidas.`:""}`}});
-    } catch(err){
-      setState({permisosMsg:{type:"err",text:"Error al leer el archivo."}});
-      console.error(err);
-    }
+    } catch(err){ setState({permisosMsg:{type:"err",text:"Error al leer el archivo."}}); console.error(err); }
   };
   reader.readAsArrayBuffer(file);
   e.target.value="";
@@ -345,9 +381,8 @@ async function cancelarPermiso(id) {
   const hoyStr=`${hoy.getFullYear()}-${String(hoy.getMonth()+1).padStart(2,"0")}-${String(hoy.getDate()).padStart(2,"0")}`;
   if (p.fecha<=hoyStr) { alert("Solo puedes cancelar hasta el día anterior a la fecha del permiso."); return; }
   if (!confirm(`¿Cancelar el permiso del ${fmtDate(p.fecha)}?`)) return;
-  try {
-    await updateDoc(doc(db,COL_PERMISOS,String(p.id)),{estado:"cancelado"});
-  } catch(e){ alert("Error al cancelar. Intenta de nuevo."); console.error(e); }
+  try { await updateDoc(doc(db,COL_PERMISOS,String(p.id)),{estado:"cancelado"}); }
+  catch(e){ alert("Error al cancelar."); console.error(e); }
 }
 
 // ── SOLICITAR ──
@@ -367,17 +402,19 @@ async function solicitar() {
       fecha:form.fecha,motivo:form.motivo,archivoNombre:form.archivoNombre,
       archivoData:form.archivoData,estado:"pendiente",observacion:"",ts:new Date().toISOString()});
     setState({form:{fecha:"",motivo:"",archivoNombre:"",archivoData:""},fOk:"Solicitud enviada correctamente."});
-  } catch(err){
-    setState({fErr:"Error al guardar. El archivo puede ser muy grande, comprime el PDF en ilovepdf.com"});
-  }
+  } catch(err){ setState({fErr:"Error al guardar. El archivo puede ser muy grande, comprime el PDF en ilovepdf.com"}); }
 }
 
 // ── DECIDIR ──
 async function decidir(id,estado) {
-  const {permisos,modalObs,maxPerDay}=state;
+  const {permisos,modalObs,maxPerDay,user}=state;
   if (estado==="aprobado") {
     const p=permisos.find(x=>x.id===id);
     const sede=p?.sede||"";
+    // Coordinador solo puede aprobar sus sedes
+    if (user.rol==="coordinador" && !user.sedes.includes(sede)) {
+      alert(`No tienes permiso para aprobar solicitudes de la sede "${sede}".`); return;
+    }
     const aprobadosDia=permisos.filter(x=>x.fecha===p.fecha&&x.estado==="aprobado"&&(x.sede||"")===sede).length;
     if (aprobadosDia>=maxPerDay) { alert(`Límite de ${maxPerDay} permisos/día para la sede "${sede||"sin sede"}" alcanzado.`); return; }
   }
@@ -389,9 +426,18 @@ async function decidir(id,estado) {
 function derived() {
   const {user,permisos}=state;
   const misPermisos=permisos.filter(p=>p.docenteId===user?.id);
-  const pendientes =permisos.filter(p=>p.estado==="pendiente").sort((a,b)=>a.ts.localeCompare(b.ts));
-  const historialR =permisos.filter(p=>p.estado!=="pendiente");
-  const usadosMes  =user?permisos.filter(p=>p.docenteId===user.id&&getMonthKey(p.fecha)===getMonthKey(new Date().toISOString())&&p.estado!=="rechazado"&&p.estado!=="cancelado").length:0;
+  // Pendientes filtrados por sedes del coordinador si aplica
+  const pendientes=permisos.filter(p=>{
+    if (p.estado!=="pendiente") return false;
+    if (user?.rol==="coordinador") return user.sedes.includes(p.sede||"Sin sede");
+    return true;
+  }).sort((a,b)=>a.ts.localeCompare(b.ts));
+  const historialR=permisos.filter(p=>{
+    if (p.estado==="pendiente") return false;
+    if (user?.rol==="coordinador") return user.sedes.includes(p.sede||"Sin sede");
+    return true;
+  });
+  const usadosMes=user?permisos.filter(p=>p.docenteId===user.id&&getMonthKey(p.fecha)===getMonthKey(new Date().toISOString())&&p.estado!=="rechazado"&&p.estado!=="cancelado").length:0;
   return {misPermisos,pendientes,historialR,usadosMes};
 }
 
@@ -422,6 +468,7 @@ function svgBg(){return`<svg style="position:absolute;inset:0;width:100%;height:
 // ── TOPBAR ──
 function topbarHtml(){
   const {user}=state;
+  const sedesLabel = user?.rol==="coordinador" && user.sedes?.length ? ` · ${user.sedes.join(", ")}` : (user?.sede?` · ${user.sede}`:"");
   return`<div class="topbar">
     <div class="topbar-left">
       <div class="topbar-icon">
@@ -433,7 +480,7 @@ function topbarHtml(){
     <div class="topbar-right">
       <div style="text-align:right">
         <p style="font-size:13px;font-weight:500">${user.nombre}</p>
-        <p style="font-size:11px;color:var(--sub)">${rolLabel(user.rol)}${user.sede?" · "+user.sede:""}</p>
+        <p style="font-size:11px;color:var(--sub)">${rolLabel(user.rol)}${sedesLabel}</p>
       </div>
       <button id="btn-pw" class="btn btn-blue-light btn-sm">🔑 Contraseña</button>
       <button id="btn-logout" class="btn btn-ghost btn-sm">Salir</button>
@@ -444,7 +491,7 @@ function bindTopbar(){
   document.getElementById("btn-pw").onclick=()=>setState({modalPw:true,pwErr:"",pwOk:"",pw:{actual:"",nueva:"",confirmar:""}});
 }
 
-// ── MODALES ──
+// ── MODALES PW ──
 function modalPwHtml(){
   if(!state.modalPw) return "";
   const {pw,pwErr,pwOk}=state;
@@ -465,7 +512,8 @@ function bindModalPw(){
 }
 function modalResetHtml(){
   if(!state.modalReset) return "";
-  const target=[...state.sysUsers,...state.docentes].find(u=>u.id===state.modalReset);
+  const allU=[...state.sysUsers,...state.docentes,...state.coordinadores];
+  const target=allU.find(u=>u.id===state.modalReset);
   const {resetPw,resetErr,resetOk}=state;
   return`<div class="overlay"><div class="modal"><h3>Resetear contraseña</h3>
     <p style="font-size:13px;color:var(--sub);margin-bottom:16px">${target?.nombre}</p>
@@ -482,6 +530,50 @@ function bindModalReset(){
   ["nueva","confirmar"].forEach(k=>{document.getElementById(`rpw-${k}`).oninput=e=>{state.resetPw[k]=e.target.value;};});
   document.getElementById("btn-reset-save").onclick=resetearPw;
   document.getElementById("btn-reset-cancel").onclick=()=>setState({modalReset:null,resetErr:"",resetOk:""});
+}
+
+// ── MODAL COORDINADOR ──
+function modalCoordHtml(){
+  if(!state.modalCoord) return "";
+  const {coordForm,coordErr,coordOk,editCoord}=state;
+  const sedes=todasSedesDisp();
+  return`<div class="overlay"><div class="modal">
+    <h3>${editCoord?"Editar coordinador":"Nuevo coordinador"}</h3>
+    <div class="field"><label class="lbl">Nombre completo</label>
+      <input class="inp" id="cf-nombre" value="${coordForm.nombre}" placeholder="Nombre del coordinador"/></div>
+    <div class="field"><label class="lbl">Número de documento</label>
+      <input class="inp" id="cf-doc" value="${coordForm.documento}" placeholder="Ej: 12345678" ${editCoord?"readonly":""}/></div>
+    <div class="field"><label class="lbl">Contraseña</label>
+      <input type="password" class="inp" id="cf-pw" value="${coordForm.password}" placeholder="••••••"/></div>
+    <div class="field"><label class="lbl">Sedes asignadas</label>
+      ${sedes.length===0?`<p style="font-size:12px;color:var(--sub)">No hay sedes disponibles. Carga primero los docentes.</p>`:`
+      <div class="sede-check">
+        ${sedes.map(s=>`<label class="sede-chip ${coordForm.sedes.includes(s)?"selected":""}" data-sede="${s}">
+          ${s}
+        </label>`).join("")}
+      </div>`}
+    </div>
+    ${coordErr?`<p class="msg-err">${coordErr}</p>`:""}${coordOk?`<p class="msg-ok">${coordOk}</p>`:""}
+    <div class="modal-btns">
+      <button class="btn btn-primary" style="flex:1" id="btn-coord-save">Guardar</button>
+      <button class="btn btn-ghost" id="btn-coord-cancel">Cancelar</button>
+    </div></div></div>`;}
+function bindModalCoord(){
+  if(!state.modalCoord) return;
+  document.getElementById("cf-nombre").oninput=e=>{state.coordForm.nombre=e.target.value;};
+  document.getElementById("cf-doc").oninput=e=>{state.coordForm.documento=e.target.value;};
+  document.getElementById("cf-pw").oninput=e=>{state.coordForm.password=e.target.value;};
+  document.querySelectorAll(".sede-chip").forEach(chip=>{
+    chip.onclick=()=>{
+      const sede=chip.dataset.sede;
+      const idx=state.coordForm.sedes.indexOf(sede);
+      if(idx>=0) state.coordForm.sedes.splice(idx,1);
+      else state.coordForm.sedes.push(sede);
+      chip.classList.toggle("selected");
+    };
+  });
+  document.getElementById("btn-coord-save").onclick=guardarCoord;
+  document.getElementById("btn-coord-cancel").onclick=()=>setState({modalCoord:false,editCoord:null,coordErr:"",coordOk:""});
 }
 
 // ── LOGIN ──
@@ -512,93 +604,63 @@ function bindLogin(){
   document.getElementById("inp-pass").onkeydown=e=>{if(e.key==="Enter")login();};
 }
 
-// ── ADMIN ──
-function renderAdmin(){
-  const {excelMsg,permisosMsg,docentes,sysUsers,maxPerDay,editMax,maxTemp,modalPw,modalReset}=state;
-  const allUsers=[...sysUsers,...docentes];
-  return`${topbarHtml()}
-  <div class="page">
-    <p style="font-size:18px;font-weight:500;margin-bottom:4px">Panel de Administración</p>
-    <p style="font-size:13px;color:var(--sub);margin-bottom:24px">Gestión de usuarios, contraseñas y configuración.</p>
-
-    <div class="card">
-      <p style="font-size:14px;font-weight:500;margin-bottom:4px">Límite de permisos aprobados por día / sede</p>
-      <p style="font-size:12px;color:var(--sub);margin-bottom:14px">El rector no podrá aprobar más de este número por sede en un mismo día.</p>
-      <div class="edit-max-row">
-        ${editMax?`
-          <input type="number" id="inp-max" class="inp" style="width:80px;text-align:center" min="1" max="20" value="${maxTemp}"/>
-          <button class="btn btn-success btn-sm" id="btn-max-save">Guardar</button>
-          <button class="btn btn-ghost btn-sm" id="btn-max-cancel">Cancelar</button>
-        `:`<span class="big-num">${maxPerDay}</span>
-          <button class="btn btn-blue-light btn-sm" id="btn-max-edit">✏️ Editar</button>`}
-      </div>
-    </div>
-
-    <div class="card">
-      <p style="font-size:14px;font-weight:500;margin-bottom:4px">Cargar docentes desde Excel</p>
-      <p style="font-size:12px;color:var(--sub);margin-bottom:14px">Columnas: <b>DOCUMENTO</b>, <b>NOMBRES</b>, <b>SEDE</b>. Contraseña inicial = número de documento.</p>
-      <label class="btn btn-primary btn-sm" style="display:inline-block;cursor:pointer">
-        📂 Seleccionar Excel de docentes
-        <input type="file" id="inp-excel" accept=".xlsx,.xls" style="display:none"/>
-      </label>
-      ${excelMsg.text?`<span style="font-size:13px;margin-left:12px;color:${excelMsg.type==="ok"?"var(--green)":"var(--red)"}">${excelMsg.text}</span>`:""}
-    </div>
-
-    <div class="card">
-      <p style="font-size:14px;font-weight:500;margin-bottom:4px">Cargar permisos históricos desde Excel</p>
-      <p style="font-size:12px;color:var(--sub);margin-bottom:4px">Columnas: <b>DOCUMENTO</b>, <b>NOMBRE</b>, <b>SEDE</b>, <b>FECHA</b>.</p>
-      <p style="font-size:12px;color:var(--sub);margin-bottom:4px">Fecha en formato <b>DD/MM/YYYY</b> o <b>YYYY-MM-DD</b>.</p>
-      <p style="font-size:12px;color:var(--sub);margin-bottom:14px">Soporta múltiples hojas (una por mes). Los permisos quedan como <b>Aprobados</b> en el historial.</p>
-      <label class="btn btn-success btn-sm" style="display:inline-block;cursor:pointer">
-        📋 Seleccionar Excel de permisos históricos
-        <input type="file" id="inp-excel-permisos" accept=".xlsx,.xls" style="display:none"/>
-      </label>
-      ${permisosMsg.text?`<p style="font-size:13px;margin-top:10px;color:${permisosMsg.type==="ok"?"var(--green)":"var(--red)"}">${permisosMsg.text}</p>`:""}
-    </div>
-
-    <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-        <p style="font-size:14px;font-weight:500">Usuarios (${allUsers.length})</p>
-        ${docentes.length>0?`<button class="btn btn-danger btn-sm" id="btn-clear">Limpiar docentes</button>`:""}
-      </div>
-      ${allUsers.length===0?`<p style="font-size:13px;color:var(--sub)">Sin usuarios.</p>`:`
-      <table><thead><tr><th>Documento</th><th>Nombre</th><th>Sede</th><th>Rol</th><th></th></tr></thead><tbody>
-        ${allUsers.map(u=>`<tr>
-          <td style="color:var(--sub)">${u.documento}</td>
-          <td style="font-weight:500">${u.nombre}</td>
-          <td style="color:var(--sub)">${u.sede||"—"}</td>
-          <td><span class="badge" style="background:var(--blue-light);color:var(--blue)">${rolLabel(u.rol)}</span></td>
-          <td><button class="btn btn-blue-light btn-sm btn-reset-user" data-id="${u.id}">🔑 Resetear</button></td>
-        </tr>`).join("")}
-      </tbody></table>`}
-    </div>
-  </div>
-  ${modalPwHtml()}${modalResetHtml()}`;}
-
-function bindAdmin(){
-  bindTopbar(); bindModalPw(); bindModalReset();
-  document.getElementById("inp-excel").onchange=handleExcel;
-  document.getElementById("inp-excel-permisos").onchange=handleExcelPermisos;
-  const bc=document.getElementById("btn-clear");
-  if(bc) bc.onclick=async()=>{await saveDocentes([]);setState({excelMsg:{type:"",text:""}});};
-  const bme=document.getElementById("btn-max-edit");
-  if(bme) bme.onclick=()=>setState({editMax:true,maxTemp:state.maxPerDay});
-  const bms=document.getElementById("btn-max-save");
-  if(bms) bms.onclick=async()=>{const v=Number(document.getElementById("inp-max").value);await saveConfig(v);setState({editMax:false,maxPerDay:v,maxTemp:v});};
-  const bmc=document.getElementById("btn-max-cancel");
-  if(bmc) bmc.onclick=()=>setState({editMax:false});
-  document.querySelectorAll(".btn-reset-user").forEach(b=>{
-    b.onclick=()=>setState({modalReset:b.dataset.id,resetPw:{nueva:"",confirmar:""},resetErr:"",resetOk:""});
+// ── TABLA POR DÍA (compartida) ──
+function tablaPorDia(permisos, filtroDia, filtroSedeDia, maxPerDay){
+  const baseD=permisos.filter(p=>
+    (!filtroDia||p.fecha===filtroDia)&&
+    (filtroSedeDia==="todos"||(p.sede||"Sin sede")===filtroSedeDia)
+  );
+  const mapaD={};
+  baseD.forEach(p=>{
+    const key=`${p.fecha}||${p.sede||"Sin sede"}`;
+    if(!mapaD[key]) mapaD[key]={fecha:p.fecha,sede:p.sede||"Sin sede",aprobados:0,pendientes:0,rechazados:0,cancelados:0,total:0};
+    mapaD[key].total++;
+    if(p.estado==="aprobado") mapaD[key].aprobados++;
+    else if(p.estado==="pendiente") mapaD[key].pendientes++;
+    else if(p.estado==="rechazado") mapaD[key].rechazados++;
+    else if(p.estado==="cancelado") mapaD[key].cancelados++;
   });
+  const diasAp=Object.values(mapaD).sort((a,b)=>b.fecha.localeCompare(a.fecha)||a.sede.localeCompare(b.sede));
+  if(diasAp.length===0) return `<p style="font-size:13px;color:var(--sub);padding:16px">Sin registros.</p>`;
+  return`<table><thead><tr>
+    <th>Fecha</th><th>Sede</th><th>Total</th>
+    <th style="color:var(--green)">Aprobados</th>
+    <th style="color:var(--yellow)">Pendientes</th>
+    <th style="color:var(--red)">Rechazados</th>
+    <th style="color:#475569">Cancelados</th>
+    <th>Cupo</th>
+  </tr></thead><tbody>
+    ${diasAp.map(r=>{
+      const pct=r.aprobados/maxPerDay;
+      const col=pct>=1?"var(--red)":pct>=0.8?"var(--yellow)":"var(--green)";
+      return`<tr>
+        <td>${fmtDate(r.fecha)}</td>
+        <td style="color:var(--sub)">${r.sede}</td>
+        <td><span style="font-weight:600;color:var(--blue)">${r.total}</span></td>
+        <td><span style="color:var(--green);font-weight:500">${r.aprobados}</span></td>
+        <td><span style="color:var(--yellow);font-weight:500">${r.pendientes}</span></td>
+        <td><span style="color:var(--red);font-weight:500">${r.rechazados}</span></td>
+        <td><span style="color:#475569;font-weight:500">${r.cancelados}</span></td>
+        <td><div style="display:flex;align-items:center;gap:6px">
+          <div class="prog-wrap"><div class="prog-bar" style="width:${Math.min(pct*100,100)}%;background:${col}"></div></div>
+          <span style="font-size:12px;font-weight:500;color:${col}">${r.aprobados}/${maxPerDay}</span>
+        </div></td>
+      </tr>`;}).join("")}
+  </tbody></table>`;
 }
 
-// ── COORDINADOR (solo lectura) ──
-function renderCoord(){
-  const {tab,permisos,maxPerDay,modalPw,
+// ── PANEL RECTOR/COORDINADOR (compartido) ──
+function renderPanel(canApprove){
+  const {tab,permisos,maxPerDay,modalPermiso,modalObs,modalPw,user,
     filtroMesRector,filtroDia,filtroDocente,filtroMesDoc,
     filtroSede,filtroSedeDia,filtroMesPend,filtroDocentePend}=state;
   const {pendientes,historialR}=derived();
-  const todasSedes=[...new Set(permisos.map(p=>p.sede||"Sin sede"))].sort();
+
+  // Sedes visibles según rol
+  const sedesVisibles = user.rol==="coordinador"
+    ? user.sedes
+    : [...new Set(permisos.map(p=>p.sede||"Sin sede"))].sort();
+
   const mesesPend=uniqueMonths(pendientes);
   const docentesPend=[...new Set(pendientes.map(p=>p.docenteNombre))].sort();
   const pendientesFiltrados=pendientes.filter(p=>
@@ -608,7 +670,7 @@ function renderCoord(){
   );
   const mesesR=uniqueMonths(historialR);
   const histF=filtroMesRector==="todos"?historialR:historialR.filter(p=>getMonthKey(p.fecha)===filtroMesRector);
-  const todosP=permisos.filter(p=>p.docenteNombre);
+  const todosP=permisos.filter(p=>p.docenteNombre&&(user.rol!=="coordinador"||user.sedes.includes(p.sede||"Sin sede")));
   const docNames=[...new Set(todosP.map(p=>p.docenteNombre))].sort();
   const mesesDocAll=uniqueMonths(todosP);
   const filtradosDoc=todosP.filter(p=>(filtroDocente==="todos"||p.docenteNombre===filtroDocente)&&(filtroMesDoc==="todos"||getMonthKey(p.fecha)===filtroMesDoc));
@@ -624,197 +686,14 @@ function renderCoord(){
     else resumen[key].pend++;
   });
   const rowsDoc=Object.values(resumen).sort((a,b)=>b.mes.localeCompare(a.mes)||a.nombre.localeCompare(b.nombre));
-  const baseD=permisos.filter(p=>p.estado==="aprobado"&&(!filtroDia||p.fecha===filtroDia)&&(filtroSedeDia==="todos"||(p.sede||"Sin sede")===filtroSedeDia));
-  const mapaD={};
-  baseD.forEach(p=>{const key=`${p.fecha}||${p.sede||"Sin sede"}`;if(!mapaD[key])mapaD[key]={fecha:p.fecha,sede:p.sede||"Sin sede",count:0};mapaD[key].count++;});
-  const diasAp=Object.values(mapaD).sort((a,b)=>b.fecha.localeCompare(a.fecha)||a.sede.localeCompare(b.sede));
 
-  return`${topbarHtml()}
-  <div class="page">
-    <div class="stat-grid">
-      ${[["Pendientes",pendientes.length],["Aprobados",permisos.filter(p=>p.estado==="aprobado").length],["Rechazados",permisos.filter(p=>p.estado==="rechazado").length]]
-        .map(([l,v])=>`<div class="stat"><p class="stat-label">${l}</p><p class="stat-val">${v}</p></div>`).join("")}
-    </div>
-    <div class="tabs">
-      ${[["pendientes",`Pendientes (${pendientes.length})`],["historial","Historial"],["por-dia","Por día"],["por-docente","Por docente"]]
-        .map(([t,l])=>`<button class="tab ${tab===t?"active":""}" data-tab="${t}">${l}</button>`).join("")}
-    </div>
-
-    ${tab==="pendientes"?`
-      <div class="filtros">
-        <span style="font-size:13px;color:var(--sub)">Sede:</span>
-        <select id="fil-sede" class="inp-sm">
-          <option value="todos">Todas las sedes</option>
-          ${todasSedes.map(s=>`<option value="${s}" ${filtroSede===s?"selected":""}>${s}</option>`).join("")}
-        </select>
-        <span style="font-size:13px;color:var(--sub)">Mes:</span>
-        <select id="fil-mes-pend" class="inp-sm">
-          <option value="todos">Todos los meses</option>
-          ${mesesPend.map(k=>`<option value="${k}" ${filtroMesPend===k?"selected":""}>${getMonthLabel(k)}</option>`).join("")}
-        </select>
-        <span style="font-size:13px;color:var(--sub)">Docente:</span>
-        <select id="fil-docente-pend" class="inp-sm">
-          <option value="todos">Todos</option>
-          ${docentesPend.map(n=>`<option value="${n}" ${filtroDocentePend===n?"selected":""}>${n}</option>`).join("")}
-        </select>
-      </div>
-      <p style="font-size:12px;color:var(--sub);margin-bottom:12px">${pendientesFiltrados.length} solicitud(es)</p>
-      ${pendientesFiltrados.length===0?`<p style="font-size:13px;color:var(--sub)">No hay solicitudes con estos filtros.</p>`:""}
-      ${pendientesFiltrados.map(p=>`<div class="perm-row">
-        <div>
-          <p style="font-weight:500">${p.docenteNombre}</p>
-          <p style="font-size:12px;color:var(--sub)">${p.sede?p.sede+" · ":""}${fmtDate(p.fecha)} · ${p.motivo}</p>
-          ${p.archivoData?`<a href="${p.archivoData}" download="${p.archivoNombre}" style="font-size:11px">Ver PDF</a>`:""}
-        </div>
-        ${badge("pendiente")}
-      </div>`).join("")}`:""}
-
-    ${tab==="historial"?`
-      <div class="filtros">
-        <span style="font-size:13px;color:var(--sub)">Mes:</span>
-        <select id="fil-mes-rector" class="inp-sm">
-          <option value="todos">Todos los meses</option>
-          ${mesesR.map(k=>`<option value="${k}" ${filtroMesRector===k?"selected":""}>${getMonthLabel(k)}</option>`).join("")}
-        </select>
-        <span style="font-size:12px;color:var(--sub)">${histF.length} registro(s)</span>
-      </div>
-      ${histF.length===0?`<p style="font-size:13px;color:var(--sub)">Sin registros.</p>`:""}
-      ${histF.map(p=>`<div class="perm-row">
-        <div>
-          <p style="font-weight:500">${p.docenteNombre}</p>
-          <p style="font-size:12px;color:var(--sub)">${p.sede?p.sede+" · ":""}${fmtDate(p.fecha)} · ${p.motivo}</p>
-          ${p.observacion?`<p style="font-size:11px;color:var(--sub)">Obs: ${p.observacion}</p>`:""}
-          ${p.archivoData?`<a href="${p.archivoData}" download="${p.archivoNombre}" style="font-size:11px">Ver PDF</a>`:""}
-        </div>${badge(p.estado)}
-      </div>`).join("")}`:""}
-
-    ${tab==="por-dia"?`
-      <div class="filtros">
-        <span style="font-size:13px;color:var(--sub)">Fecha:</span>
-        <input type="date" id="fil-dia" class="inp-sm" value="${filtroDia}"/>
-        <span style="font-size:13px;color:var(--sub)">Sede:</span>
-        <select id="fil-sede-dia" class="inp-sm">
-          <option value="todos">Todas las sedes</option>
-          ${todasSedes.map(s=>`<option value="${s}" ${filtroSedeDia===s?"selected":""}>${s}</option>`).join("")}
-        </select>
-        ${filtroDia||filtroSedeDia!=="todos"?`<button class="btn btn-ghost btn-sm" id="btn-clear-dia">Limpiar</button>`:""}
-      </div>
-      <div class="card" style="padding:0;overflow:hidden">
-        <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
-          <p style="font-size:13px;font-weight:500">Aprobados por día y sede</p>
-          <span class="badge" style="background:var(--blue-light);color:var(--blue)">Límite: ${maxPerDay}/día/sede</span>
-        </div>
-        ${diasAp.length===0?`<p style="font-size:13px;color:var(--sub);padding:16px">Sin registros.</p>`:`
-        <table><thead><tr><th>Fecha</th><th>Sede</th><th>Aprobados</th><th>Estado</th></tr></thead><tbody>
-          ${diasAp.map(r=>{
-            const pct=r.count/maxPerDay;
-            const col=pct>=1?"var(--red)":pct>=0.8?"var(--yellow)":"var(--green)";
-            const bgc=pct>=1?"var(--red-bg)":pct>=0.8?"var(--yellow-bg)":"var(--green-bg)";
-            return`<tr>
-              <td>${fmtDate(r.fecha)}</td><td style="color:var(--sub)">${r.sede}</td>
-              <td><div style="display:flex;align-items:center;gap:8px">
-                <div class="prog-wrap"><div class="prog-bar" style="width:${Math.min(pct*100,100)}%;background:${col}"></div></div>
-                <span style="font-weight:500">${r.count}/${maxPerDay}</span>
-              </div></td>
-              <td><span class="badge" style="background:${bgc};color:${col}">${pct>=1?"Límite alcanzado":pct>=0.8?"Casi lleno":"Disponible"}</span></td>
-            </tr>`;}).join("")}
-        </tbody></table>`}
-      </div>`:""}
-
-    ${tab==="por-docente"?`
-      <div class="filtros">
-        <span style="font-size:13px;color:var(--sub)">Docente:</span>
-        <select id="fil-docente" class="inp-sm">
-          <option value="todos">Todos</option>
-          ${docNames.map(n=>`<option value="${n}" ${filtroDocente===n?"selected":""}>${n}</option>`).join("")}
-        </select>
-        <span style="font-size:13px;color:var(--sub)">Mes:</span>
-        <select id="fil-mes-doc" class="inp-sm">
-          <option value="todos">Todos</option>
-          ${mesesDocAll.map(k=>`<option value="${k}" ${filtroMesDoc===k?"selected":""}>${getMonthLabel(k)}</option>`).join("")}
-        </select>
-        <span style="font-size:12px;color:var(--sub)">${rowsDoc.length} registro(s)</span>
-      </div>
-      <div class="card" style="padding:0;overflow:hidden">
-        ${rowsDoc.length===0?`<p style="font-size:13px;color:var(--sub);padding:16px">Sin registros.</p>`:`
-        <table><thead><tr><th>Docente</th><th>Sede</th><th>Mes</th><th>Total</th><th>Aprobados</th><th>Rechazados</th><th>Cancelados</th><th>Pendientes</th></tr></thead><tbody>
-          ${rowsDoc.map(r=>`<tr>
-            <td style="font-weight:500">${r.nombre}</td>
-            <td style="color:var(--sub)">${r.sede}</td>
-            <td style="color:var(--sub);text-transform:capitalize">${getMonthLabel(r.mes)}</td>
-            <td><span style="font-weight:600;color:var(--blue)">${r.total}</span></td>
-            <td><span style="color:var(--green);font-weight:500">${r.aprobados}</span></td>
-            <td><span style="color:var(--red);font-weight:500">${r.rechazados}</span></td>
-            <td><span style="color:#475569;font-weight:500">${r.cancelados}</span></td>
-            <td><span style="color:var(--yellow);font-weight:500">${r.pend}</span></td>
-          </tr>`).join("")}
-        </tbody></table>`}
-      </div>`:""}
-  </div>
-  ${modalPwHtml()}`;}
-
-function bindCoord(){
-  bindTopbar(); bindModalPw();
-  document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>setState({tab:b.dataset.tab}));
-  const fsede=document.getElementById("fil-sede");
-  if(fsede) fsede.onchange=e=>setState({filtroSede:e.target.value});
-  const fmp=document.getElementById("fil-mes-pend");
-  if(fmp) fmp.onchange=e=>setState({filtroMesPend:e.target.value});
-  const fdp=document.getElementById("fil-docente-pend");
-  if(fdp) fdp.onchange=e=>setState({filtroDocentePend:e.target.value});
-  const fmr=document.getElementById("fil-mes-rector");
-  if(fmr) fmr.onchange=e=>setState({filtroMesRector:e.target.value});
-  const fdia=document.getElementById("fil-dia");
-  if(fdia) fdia.onchange=e=>setState({filtroDia:e.target.value});
-  const fsdd=document.getElementById("fil-sede-dia");
-  if(fsdd) fsdd.onchange=e=>setState({filtroSedeDia:e.target.value});
-  const bcd=document.getElementById("btn-clear-dia");
-  if(bcd) bcd.onclick=()=>setState({filtroDia:"",filtroSedeDia:"todos"});
-  const fdoc=document.getElementById("fil-docente");
-  if(fdoc) fdoc.onchange=e=>setState({filtroDocente:e.target.value});
-  const fmd=document.getElementById("fil-mes-doc");
-  if(fmd) fmd.onchange=e=>setState({filtroMesDoc:e.target.value});
-}
-
-// ── RECTOR ──
-function renderRector(){
-  const {tab,permisos,maxPerDay,modalPermiso,modalObs,modalPw,
-    filtroMesRector,filtroDia,filtroDocente,filtroMesDoc,
-    filtroSede,filtroSedeDia,filtroMesPend,filtroDocentePend}=state;
-  const {pendientes,historialR}=derived();
-  const todasSedes=[...new Set(permisos.map(p=>p.sede||"Sin sede"))].sort();
-  const mesesPend=uniqueMonths(pendientes);
-  const docentesPend=[...new Set(pendientes.map(p=>p.docenteNombre))].sort();
-  const pendientesFiltrados=pendientes.filter(p=>
-    (filtroSede==="todos"||(p.sede||"Sin sede")===filtroSede)&&
-    (filtroMesPend==="todos"||getMonthKey(p.fecha)===filtroMesPend)&&
-    (filtroDocentePend==="todos"||p.docenteNombre===filtroDocentePend)
-  );
-  const mesesR=uniqueMonths(historialR);
-  const histF=filtroMesRector==="todos"?historialR:historialR.filter(p=>getMonthKey(p.fecha)===filtroMesRector);
-  const todosP=permisos.filter(p=>p.docenteNombre);
-  const docNames=[...new Set(todosP.map(p=>p.docenteNombre))].sort();
-  const mesesDocAll=uniqueMonths(todosP);
-  const filtradosDoc=todosP.filter(p=>(filtroDocente==="todos"||p.docenteNombre===filtroDocente)&&(filtroMesDoc==="todos"||getMonthKey(p.fecha)===filtroMesDoc));
-  const resumen={};
-  filtradosDoc.forEach(p=>{
-    const mes=getMonthKey(p.fecha);
-    const key=`${p.docenteNombre}||${mes}`;
-    if(!resumen[key]) resumen[key]={nombre:p.docenteNombre,sede:p.sede||"—",mes,total:0,aprobados:0,rechazados:0,pend:0,cancelados:0};
-    resumen[key].total++;
-    if(p.estado==="aprobado") resumen[key].aprobados++;
-    else if(p.estado==="rechazado") resumen[key].rechazados++;
-    else if(p.estado==="cancelado") resumen[key].cancelados++;
-    else resumen[key].pend++;
-  });
-  const rowsDoc=Object.values(resumen).sort((a,b)=>b.mes.localeCompare(a.mes)||a.nombre.localeCompare(b.nombre));
-  const baseD=permisos.filter(p=>p.estado==="aprobado"&&(!filtroDia||p.fecha===filtroDia)&&(filtroSedeDia==="todos"||(p.sede||"Sin sede")===filtroSedeDia));
-  const mapaD={};
-  baseD.forEach(p=>{const key=`${p.fecha}||${p.sede||"Sin sede"}`;if(!mapaD[key])mapaD[key]={fecha:p.fecha,sede:p.sede||"Sin sede",count:0};mapaD[key].count++;});
-  const diasAp=Object.values(mapaD).sort((a,b)=>b.fecha.localeCompare(a.fecha)||a.sede.localeCompare(b.sede));
+  // Filtrar por día solo sedes visibles para coordinador
+  const permisosParaDia = user.rol==="coordinador"
+    ? permisos.filter(p=>user.sedes.includes(p.sede||"Sin sede"))
+    : permisos;
 
   let modalHtml="";
-  if(modalPermiso){
+  if(modalPermiso && canApprove){
     const p=modalPermiso;
     const sede=p.sede||"";
     const aprobadosDia=permisos.filter(x=>x.fecha===p.fecha&&x.estado==="aprobado"&&(x.sede||"")===sede).length;
@@ -835,13 +714,13 @@ function renderRector(){
       <div class="modal-btns">
         <button class="btn btn-success" style="flex:1" id="btn-aprobar">Aprobar</button>
         <button class="btn btn-danger"  style="flex:1" id="btn-rechazar">Rechazar</button>
-        <button class="btn btn-ghost"   id="btn-cancelar">Cancelar</button>
+        <button class="btn btn-ghost"   id="btn-cancelar-modal">Cancelar</button>
       </div></div></div>`;}
 
   return`${topbarHtml()}
   <div class="page">
     <div class="stat-grid">
-      ${[["Pendientes",pendientes.length],["Aprobados",permisos.filter(p=>p.estado==="aprobado").length],["Rechazados",permisos.filter(p=>p.estado==="rechazado").length]]
+      ${[["Pendientes",pendientes.length],["Aprobados",permisos.filter(p=>p.estado==="aprobado"&&(user.rol!=="coordinador"||user.sedes.includes(p.sede||"Sin sede"))).length],["Rechazados",permisos.filter(p=>p.estado==="rechazado"&&(user.rol!=="coordinador"||user.sedes.includes(p.sede||"Sin sede"))).length]]
         .map(([l,v])=>`<div class="stat"><p class="stat-label">${l}</p><p class="stat-val">${v}</p></div>`).join("")}
     </div>
     <div class="tabs">
@@ -854,7 +733,7 @@ function renderRector(){
         <span style="font-size:13px;color:var(--sub)">Sede:</span>
         <select id="fil-sede" class="inp-sm">
           <option value="todos">Todas las sedes</option>
-          ${todasSedes.map(s=>`<option value="${s}" ${filtroSede===s?"selected":""}>${s}</option>`).join("")}
+          ${sedesVisibles.map(s=>`<option value="${s}" ${filtroSede===s?"selected":""}>${s}</option>`).join("")}
         </select>
         <span style="font-size:13px;color:var(--sub)">Mes:</span>
         <select id="fil-mes-pend" class="inp-sm">
@@ -875,7 +754,7 @@ function renderRector(){
           <p style="font-size:12px;color:var(--sub)">${p.sede?p.sede+" · ":""}${fmtDate(p.fecha)} · ${p.motivo}</p>
           ${p.archivoData?`<a href="${p.archivoData}" download="${p.archivoNombre}" style="font-size:11px">Ver PDF</a>`:""}
         </div>
-        <button class="btn btn-primary btn-sm btn-revisar" data-id="${p.id}">Revisar</button>
+        ${canApprove?`<button class="btn btn-primary btn-sm btn-revisar" data-id="${p.id}">Revisar</button>`:badge("pendiente")}
       </div>`).join("")}`:""}
 
     ${tab==="historial"?`
@@ -904,30 +783,16 @@ function renderRector(){
         <span style="font-size:13px;color:var(--sub)">Sede:</span>
         <select id="fil-sede-dia" class="inp-sm">
           <option value="todos">Todas las sedes</option>
-          ${todasSedes.map(s=>`<option value="${s}" ${filtroSedeDia===s?"selected":""}>${s}</option>`).join("")}
+          ${sedesVisibles.map(s=>`<option value="${s}" ${filtroSedeDia===s?"selected":""}>${s}</option>`).join("")}
         </select>
         ${filtroDia||filtroSedeDia!=="todos"?`<button class="btn btn-ghost btn-sm" id="btn-clear-dia">Limpiar</button>`:""}
       </div>
       <div class="card" style="padding:0;overflow:hidden">
         <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
-          <p style="font-size:13px;font-weight:500">Aprobados por día y sede</p>
-          <span class="badge" style="background:var(--blue-light);color:var(--blue)">Límite: ${maxPerDay}/día/sede</span>
+          <p style="font-size:13px;font-weight:500">Permisos por día y sede</p>
+          <span class="badge" style="background:var(--blue-light);color:var(--blue)">Límite aprobados: ${maxPerDay}/día/sede</span>
         </div>
-        ${diasAp.length===0?`<p style="font-size:13px;color:var(--sub);padding:16px">Sin registros.</p>`:`
-        <table><thead><tr><th>Fecha</th><th>Sede</th><th>Aprobados</th><th>Estado</th></tr></thead><tbody>
-          ${diasAp.map(r=>{
-            const pct=r.count/maxPerDay;
-            const col=pct>=1?"var(--red)":pct>=0.8?"var(--yellow)":"var(--green)";
-            const bgc=pct>=1?"var(--red-bg)":pct>=0.8?"var(--yellow-bg)":"var(--green-bg)";
-            return`<tr>
-              <td>${fmtDate(r.fecha)}</td><td style="color:var(--sub)">${r.sede}</td>
-              <td><div style="display:flex;align-items:center;gap:8px">
-                <div class="prog-wrap"><div class="prog-bar" style="width:${Math.min(pct*100,100)}%;background:${col}"></div></div>
-                <span style="font-weight:500">${r.count}/${maxPerDay}</span>
-              </div></td>
-              <td><span class="badge" style="background:${bgc};color:${col}">${pct>=1?"Límite alcanzado":pct>=0.8?"Casi lleno":"Disponible"}</span></td>
-            </tr>`;}).join("")}
-        </tbody></table>`}
+        ${tablaPorDia(permisosParaDia,filtroDia,filtroSedeDia,maxPerDay)}
       </div>`:""}
 
     ${tab==="por-docente"?`
@@ -948,8 +813,7 @@ function renderRector(){
         ${rowsDoc.length===0?`<p style="font-size:13px;color:var(--sub);padding:16px">Sin registros.</p>`:`
         <table><thead><tr><th>Docente</th><th>Sede</th><th>Mes</th><th>Total</th><th>Aprobados</th><th>Rechazados</th><th>Cancelados</th><th>Pendientes</th></tr></thead><tbody>
           ${rowsDoc.map(r=>`<tr>
-            <td style="font-weight:500">${r.nombre}</td>
-            <td style="color:var(--sub)">${r.sede}</td>
+            <td style="font-weight:500">${r.nombre}</td><td style="color:var(--sub)">${r.sede}</td>
             <td style="color:var(--sub);text-transform:capitalize">${getMonthLabel(r.mes)}</td>
             <td><span style="font-weight:600;color:var(--blue)">${r.total}</span></td>
             <td><span style="color:var(--green);font-weight:500">${r.aprobados}</span></td>
@@ -962,20 +826,22 @@ function renderRector(){
   </div>
   ${modalHtml}${modalPwHtml()}`;}
 
-function bindRector(){
+function bindPanel(canApprove){
   bindTopbar(); bindModalPw();
   document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>setState({tab:b.dataset.tab}));
-  document.querySelectorAll(".btn-revisar").forEach(b=>{
-    b.onclick=()=>{const p=state.permisos.find(x=>x.id==b.dataset.id);setState({modalPermiso:p,modalObs:""});};
-  });
-  const bap=document.getElementById("btn-aprobar");
-  const brj=document.getElementById("btn-rechazar");
-  const bcl=document.getElementById("btn-cancelar");
-  const mobs=document.getElementById("modal-obs");
-  if(mobs) mobs.oninput=e=>{state.modalObs=e.target.value;};
-  if(bap) bap.onclick=()=>decidir(state.modalPermiso.id,"aprobado");
-  if(brj) brj.onclick=()=>decidir(state.modalPermiso.id,"rechazado");
-  if(bcl) bcl.onclick=()=>setState({modalPermiso:null});
+  if(canApprove){
+    document.querySelectorAll(".btn-revisar").forEach(b=>{
+      b.onclick=()=>{const p=state.permisos.find(x=>x.id==b.dataset.id);setState({modalPermiso:p,modalObs:""});};
+    });
+    const bap=document.getElementById("btn-aprobar");
+    const brj=document.getElementById("btn-rechazar");
+    const bcm=document.getElementById("btn-cancelar-modal");
+    const mobs=document.getElementById("modal-obs");
+    if(mobs) mobs.oninput=e=>{state.modalObs=e.target.value;};
+    if(bap) bap.onclick=()=>decidir(state.modalPermiso.id,"aprobado");
+    if(brj) brj.onclick=()=>decidir(state.modalPermiso.id,"rechazado");
+    if(bcm) bcm.onclick=()=>setState({modalPermiso:null});
+  }
   const fsede=document.getElementById("fil-sede");
   if(fsede) fsede.onchange=e=>setState({filtroSede:e.target.value});
   const fmp=document.getElementById("fil-mes-pend");
@@ -994,6 +860,117 @@ function bindRector(){
   if(fdoc) fdoc.onchange=e=>setState({filtroDocente:e.target.value});
   const fmd=document.getElementById("fil-mes-doc");
   if(fmd) fmd.onchange=e=>setState({filtroMesDoc:e.target.value});
+}
+
+// ── ADMIN ──
+function renderAdmin(){
+  const {excelMsg,permisosMsg,docentes,sysUsers,coordinadores,maxPerDay,editMax,maxTemp,modalPw,modalReset,modalCoord}=state;
+  const allUsers=[...sysUsers,...docentes];
+  return`${topbarHtml()}
+  <div class="page">
+    <p style="font-size:18px;font-weight:500;margin-bottom:4px">Panel de Administración</p>
+    <p style="font-size:13px;color:var(--sub);margin-bottom:24px">Gestión de usuarios, coordinadores y configuración.</p>
+
+    <div class="card">
+      <p style="font-size:14px;font-weight:500;margin-bottom:4px">Límite de permisos aprobados por día / sede</p>
+      <p style="font-size:12px;color:var(--sub);margin-bottom:14px">Máximo de permisos que el rector o coordinadores pueden aprobar por sede en un mismo día.</p>
+      <div class="edit-max-row">
+        ${editMax?`
+          <input type="number" id="inp-max" class="inp" style="width:80px;text-align:center" min="1" max="20" value="${maxTemp}"/>
+          <button class="btn btn-success btn-sm" id="btn-max-save">Guardar</button>
+          <button class="btn btn-ghost btn-sm" id="btn-max-cancel">Cancelar</button>
+        `:`<span class="big-num">${maxPerDay}</span>
+          <button class="btn btn-blue-light btn-sm" id="btn-max-edit">✏️ Editar</button>`}
+      </div>
+    </div>
+
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <div>
+          <p style="font-size:14px;font-weight:500;margin-bottom:2px">Coordinadores (${coordinadores.length})</p>
+          <p style="font-size:12px;color:var(--sub)">Cada coordinador solo puede gestionar permisos de sus sedes asignadas.</p>
+        </div>
+        <button class="btn btn-primary btn-sm" id="btn-nuevo-coord">+ Nuevo</button>
+      </div>
+      ${coordinadores.length===0?`<p style="font-size:13px;color:var(--sub)">No hay coordinadores registrados.</p>`:`
+      <table><thead><tr><th>Nombre</th><th>Documento</th><th>Sedes asignadas</th><th></th></tr></thead><tbody>
+        ${coordinadores.map(c=>`<tr>
+          <td style="font-weight:500">${c.nombre}</td>
+          <td style="color:var(--sub)">${c.documento}</td>
+          <td><div style="display:flex;gap:4px;flex-wrap:wrap">${(c.sedes||[]).map(s=>`<span class="badge" style="background:var(--blue-light);color:var(--blue)">${s}</span>`).join("")}</div></td>
+          <td><div style="display:flex;gap:6px">
+            <button class="btn btn-blue-light btn-sm btn-edit-coord" data-id="${c.id}">✏️</button>
+            <button class="btn btn-danger btn-sm btn-del-coord" data-id="${c.id}">🗑️</button>
+            <button class="btn btn-blue-light btn-sm btn-reset-user" data-id="${c.id}">🔑</button>
+          </div></td>
+        </tr>`).join("")}
+      </tbody></table>`}
+    </div>
+
+    <div class="card">
+      <p style="font-size:14px;font-weight:500;margin-bottom:4px">Cargar docentes desde Excel</p>
+      <p style="font-size:12px;color:var(--sub);margin-bottom:14px">Columnas: <b>DOCUMENTO</b>, <b>NOMBRES</b>, <b>SEDE</b>. Contraseña inicial = número de documento.</p>
+      <label class="btn btn-primary btn-sm" style="display:inline-block;cursor:pointer">
+        📂 Seleccionar Excel de docentes
+        <input type="file" id="inp-excel" accept=".xlsx,.xls" style="display:none"/>
+      </label>
+      ${excelMsg.text?`<span style="font-size:13px;margin-left:12px;color:${excelMsg.type==="ok"?"var(--green)":"var(--red)"}">${excelMsg.text}</span>`:""}
+    </div>
+
+    <div class="card">
+      <p style="font-size:14px;font-weight:500;margin-bottom:4px">Cargar permisos históricos desde Excel</p>
+      <p style="font-size:12px;color:var(--sub);margin-bottom:4px">Columnas: <b>DOCUMENTO</b>, <b>NOMBRE</b>, <b>SEDE</b>, <b>FECHA</b>.</p>
+      <p style="font-size:12px;color:var(--sub);margin-bottom:14px">Fecha en formato <b>DD/MM/YYYY</b>. Soporta múltiples hojas (una por mes).</p>
+      <label class="btn btn-success btn-sm" style="display:inline-block;cursor:pointer">
+        📋 Seleccionar Excel de permisos históricos
+        <input type="file" id="inp-excel-permisos" accept=".xlsx,.xls" style="display:none"/>
+      </label>
+      ${permisosMsg.text?`<p style="font-size:13px;margin-top:10px;color:${permisosMsg.type==="ok"?"var(--green)":"var(--red)"}">${permisosMsg.text}</p>`:""}
+    </div>
+
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <p style="font-size:14px;font-weight:500">Usuarios del sistema (${allUsers.length})</p>
+        ${docentes.length>0?`<button class="btn btn-danger btn-sm" id="btn-clear">Limpiar docentes</button>`:""}
+      </div>
+      ${allUsers.length===0?`<p style="font-size:13px;color:var(--sub)">Sin usuarios.</p>`:`
+      <table><thead><tr><th>Documento</th><th>Nombre</th><th>Sede</th><th>Rol</th><th></th></tr></thead><tbody>
+        ${allUsers.map(u=>`<tr>
+          <td style="color:var(--sub)">${u.documento}</td>
+          <td style="font-weight:500">${u.nombre}</td>
+          <td style="color:var(--sub)">${u.sede||"—"}</td>
+          <td><span class="badge" style="background:var(--blue-light);color:var(--blue)">${rolLabel(u.rol)}</span></td>
+          <td><button class="btn btn-blue-light btn-sm btn-reset-user" data-id="${u.id}">🔑 Resetear</button></td>
+        </tr>`).join("")}
+      </tbody></table>`}
+    </div>
+  </div>
+  ${modalPwHtml()}${modalResetHtml()}${modalCoordHtml()}`;}
+
+function bindAdmin(){
+  bindTopbar(); bindModalPw(); bindModalReset(); bindModalCoord();
+  document.getElementById("inp-excel").onchange=handleExcel;
+  document.getElementById("inp-excel-permisos").onchange=handleExcelPermisos;
+  const bc=document.getElementById("btn-clear");
+  if(bc) bc.onclick=async()=>{await saveDocentes([]);setState({excelMsg:{type:"",text:""}});};
+  const bme=document.getElementById("btn-max-edit");
+  if(bme) bme.onclick=()=>setState({editMax:true,maxTemp:state.maxPerDay});
+  const bms=document.getElementById("btn-max-save");
+  if(bms) bms.onclick=async()=>{const v=Number(document.getElementById("inp-max").value);await saveConfig(v);setState({editMax:false,maxPerDay:v,maxTemp:v});};
+  const bmc=document.getElementById("btn-max-cancel");
+  if(bmc) bmc.onclick=()=>setState({editMax:false});
+  const bnc=document.getElementById("btn-nuevo-coord");
+  if(bnc) bnc.onclick=()=>setState({modalCoord:true,editCoord:null,coordForm:{nombre:"",documento:"",password:"",sedes:[]},coordErr:"",coordOk:""});
+  document.querySelectorAll(".btn-edit-coord").forEach(b=>{
+    b.onclick=()=>{
+      const c=state.coordinadores.find(x=>x.id===b.dataset.id);
+      if(c) setState({modalCoord:true,editCoord:c,coordForm:{nombre:c.nombre,documento:c.documento,password:c.password,sedes:[...c.sedes]},coordErr:"",coordOk:""});
+    };
+  });
+  document.querySelectorAll(".btn-del-coord").forEach(b=>{ b.onclick=()=>eliminarCoord(b.dataset.id); });
+  document.querySelectorAll(".btn-reset-user").forEach(b=>{
+    b.onclick=()=>setState({modalReset:b.dataset.id,resetPw:{nueva:"",confirmar:""},resetErr:"",resetOk:""});
+  });
 }
 
 // ── DOCENTE ──
@@ -1077,10 +1054,10 @@ function render(){
   const {user}=state;
   const root=document.getElementById("app");
   if(!user){root.innerHTML=renderLogin();bindLogin();return;}
-  if(user.rol==="admin")        {root.innerHTML=renderAdmin();       bindAdmin();   }
-  if(user.rol==="rector")       {root.innerHTML=renderRector();      bindRector();  }
-  if(user.rol==="coordinador")  {root.innerHTML=renderCoord();       bindCoord();   }
-  if(user.rol==="docente")      {root.innerHTML=renderDocente();     bindDocente(); }
+  if(user.rol==="admin")       {root.innerHTML=renderAdmin();      bindAdmin();          }
+  if(user.rol==="rector")      {root.innerHTML=renderPanel(true);  bindPanel(true);      }
+  if(user.rol==="coordinador") {root.innerHTML=renderPanel(true);  bindPanel(true);      }
+  if(user.rol==="docente")     {root.innerHTML=renderDocente();    bindDocente();        }
 }
 </script>
 </body>
