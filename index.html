@@ -864,7 +864,7 @@ function bindPanel(canApprove){
   const fmr=document.getElementById("fil-mes-rector");
   if(fmr) fmr.onchange=e=>setState({filtroMesRector:e.target.value});
   const fdia=document.getElementById("fil-dia");
-  if(fdia) fdia.onchange=e=>setState({filtroDia:e.target.value});
+  if(fdia) { fdia.onchange=e=>setState({filtroDia:e.target.value}); fdia.oninput=e=>setState({filtroDia:e.target.value}); }
   const fsdd=document.getElementById("fil-sede-dia");
   if(fsdd) fsdd.onchange=e=>setState({filtroSedeDia:e.target.value});
   const bcd=document.getElementById("btn-clear-dia");
