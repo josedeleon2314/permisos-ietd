@@ -115,7 +115,8 @@ const COL_SYSUSERS  = "sysusers";
 const COL_COORDS    = "coordinadores";
 
 let state = {
-  user: null, sysUsers: [], docentes: [], permisos: [], coordinadores: [], maxPerDay: 5,
+  user: null, sysUsers: [], docentes: [], permisos: [], coordinadores: [],
+  maxPerDay: 5, limitesSedes: {},
   tab: "pendientes", modalPermiso: null, modalObs: "",
   modalPw: false, modalReset: null,
   modalCoord: false, editCoord: null,
@@ -394,8 +395,13 @@ async function solicitar() {
   const mesKey=getMonthKey(form.fecha);
   const enMes=permisos.filter(p=>p.docenteId===user.id&&getMonthKey(p.fecha)===mesKey&&p.estado!=="rechazado"&&p.estado!=="cancelado");
   if (enMes.length>=3) { setState({fErr:"Ya tienes 3 permisos este mes."}); return; }
-  const enDia=permisos.filter(p=>p.fecha===form.fecha&&(p.estado==="pendiente"||p.estado==="aprobado")&&(p.sede||"")===(user.sede||""));
-  if (enDia.length>=state.maxPerDay) { setState({fErr:`Para el ${fmtDate(form.fecha)} ya no se pueden realizar más solicitudes en tu sede (límite de ${state.maxPerDay} alcanzado).`}); return; }
+  const sedDocente = user.sede || "";
+  const limiteSede = getLimiteSede(sedDocente);
+  const enDia = permisos.filter(p=>p.fecha===form.fecha&&(p.estado==="pendiente"||p.estado==="aprobado")&&(p.sede||"")===sedDocente);
+  if (enDia.length >= limiteSede) {
+    setState({fErr:`Ya hay ${enDia.length} solicitud(es) activa(s) para el ${fmtDate(form.fecha)} en tu sede. El límite es ${limiteSede} (${enDia.filter(p=>p.estado==="aprobado").length} aprobada(s) y ${enDia.filter(p=>p.estado==="pendiente").length} pendiente(s) de aprobación).`});
+    return;
+  }
   try {
     const id=Date.now();
     await savePermiso({id,docenteId:user.id,docenteNombre:user.nombre,sede:user.sede||"",
@@ -637,7 +643,8 @@ function tablaPorDia(permisos, filtroDia, filtroSedeDia, maxPerDay){
     <th>Cupo</th>
   </tr></thead><tbody>
     ${diasAp.map(r=>{
-      const pct=r.aprobados/maxPerDay;
+      const lim=getLimiteSede(r.sede);
+      const pct=r.aprobados/lim;
       const col=pct>=1?"var(--red)":pct>=0.8?"var(--yellow)":"var(--green)";
       return`<tr>
         <td>${fmtDate(r.fecha)}</td>
@@ -649,7 +656,7 @@ function tablaPorDia(permisos, filtroDia, filtroSedeDia, maxPerDay){
         <td><span style="color:#475569;font-weight:500">${r.cancelados}</span></td>
         <td><div style="display:flex;align-items:center;gap:6px">
           <div class="prog-wrap"><div class="prog-bar" style="width:${Math.min(pct*100,100)}%;background:${col}"></div></div>
-          <span style="font-size:12px;font-weight:500;color:${col}">${r.aprobados}/${maxPerDay}</span>
+          <span style="font-size:12px;font-weight:500;color:${col}">${r.aprobados}/${lim}</span>
         </div></td>
       </tr>`;}).join("")}
   </tbody></table>`;
@@ -878,16 +885,27 @@ function renderAdmin(){
     <p style="font-size:13px;color:var(--sub);margin-bottom:24px">Gestión de usuarios, coordinadores y configuración.</p>
 
     <div class="card">
-      <p style="font-size:14px;font-weight:500;margin-bottom:4px">Límite de permisos aprobados por día / sede</p>
-      <p style="font-size:12px;color:var(--sub);margin-bottom:14px">Máximo de permisos que el rector o coordinadores pueden aprobar por sede en un mismo día.</p>
-      <div class="edit-max-row">
-        ${editMax?`
-          <input type="number" id="inp-max" class="inp" style="width:80px;text-align:center" min="1" max="20" value="${maxTemp}"/>
-          <button class="btn btn-success btn-sm" id="btn-max-save">Guardar</button>
-          <button class="btn btn-ghost btn-sm" id="btn-max-cancel">Cancelar</button>
-        `:`<span class="big-num">${maxPerDay}</span>
-          <button class="btn btn-blue-light btn-sm" id="btn-max-edit">✏️ Editar</button>`}
+      <p style="font-size:14px;font-weight:500;margin-bottom:4px">Límite de permisos por día / sede</p>
+      <p style="font-size:12px;color:var(--sub);margin-bottom:14px">Configura cuántos permisos se pueden solicitar y aprobar por día en cada sede. El valor general aplica a sedes sin configuración específica.</p>
+
+      <p style="font-size:13px;font-weight:500;color:var(--text);margin-bottom:8px">Límite general (sedes sin configuración específica):</p>
+      <div class="edit-max-row" style="margin-bottom:16px">
+        <input type="number" id="inp-max-general" class="inp" style="width:80px;text-align:center" min="1" max="20" value="${maxPerDay}"/>
+        <span style="font-size:12px;color:var(--sub)">permisos/día</span>
       </div>
+
+      <p style="font-size:13px;font-weight:500;color:var(--text);margin-bottom:8px">Límite por sede:</p>
+      <div id="sedes-limites-wrap">
+        ${todasSedesDisp().map(sede=>`
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+            <span style="font-size:13px;min-width:100px;color:var(--text)">${sede}</span>
+            <input type="number" class="inp inp-sede-limite" data-sede="${sede}" style="width:80px;text-align:center" min="1" max="20" value="${state.limitesSedes[sede]??maxPerDay}"/>
+            <span style="font-size:12px;color:var(--sub)">permisos/día</span>
+          </div>`).join("")}
+        ${todasSedesDisp().length===0?`<p style="font-size:12px;color:var(--sub)">Carga primero los docentes para ver las sedes.</p>`:""}
+      </div>
+      <button class="btn btn-primary btn-sm" id="btn-save-limites" style="margin-top:8px">💾 Guardar límites</button>
+      <span id="limites-msg" style="font-size:12px;margin-left:12px"></span>
     </div>
 
     <div class="card">
