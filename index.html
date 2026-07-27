@@ -617,7 +617,8 @@ function bindLogin(){
 }
 
 // ── TABLA POR DÍA (compartida) ──
-function tablaPorDia(permisos, filtroDia, filtroSedeDia, maxPerDay){
+function tablaPorDia(permisos, filtroDia, filtroSedeDia, maxPerDay, limitesSedes){
+  function getLim(sede){ return limitesSedes[sede] ?? maxPerDay; }
   const baseD=permisos.filter(p=>
     (!filtroDia||p.fecha===filtroDia)&&
     (filtroSedeDia==="todos"||(p.sede||"Sin sede")===filtroSedeDia)
@@ -643,7 +644,7 @@ function tablaPorDia(permisos, filtroDia, filtroSedeDia, maxPerDay){
     <th>Cupo</th>
   </tr></thead><tbody>
     ${diasAp.map(r=>{
-      const lim=getLimiteSede(r.sede);
+      const lim=getLim(r.sede);
       const pct=r.aprobados/lim;
       const col=pct>=1?"var(--red)":pct>=0.8?"var(--yellow)":"var(--green)";
       return`<tr>
@@ -805,7 +806,7 @@ function renderPanel(canApprove){
           <p style="font-size:13px;font-weight:500">Permisos por día y sede</p>
           <span class="badge" style="background:var(--blue-light);color:var(--blue)">Límite aprobados: ${maxPerDay}/día/sede</span>
         </div>
-        ${tablaPorDia(permisosParaDia,filtroDia,filtroSedeDia,maxPerDay)}
+        ${tablaPorDia(permisosParaDia,filtroDia,filtroSedeDia,maxPerDay,state.limitesSedes)}
       </div>`:""}
 
     ${tab==="por-docente"?`
