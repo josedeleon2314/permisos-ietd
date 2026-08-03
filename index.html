@@ -248,7 +248,15 @@ document.addEventListener("click",async function(e){
     return;
   }
 
-  // Abrir permiso extraordinario
+  // Cambio de sede en extraordinario
+  const btnExtraSede=e.target.closest("#extra-sede");
+  if(btnExtraSede){
+    state.extraForm.sede=btnExtraSede.value;
+    state.extraForm.docenteId="";
+    render();
+    bindModalExtra();
+    return;
+  }
   const btnExtra=e.target.closest("#btn-abrir-extra");
   if(btnExtra){
     setState({modalExtra:true,extraErr:"",extraOk:"",extraForm:{sede:"",docenteId:"",fecha:"",archivoNombre:"",archivoData:""}});
@@ -593,12 +601,6 @@ function modalExtraHtml(){
 }
 function bindModalExtra(){
   if(!state.modalExtra) return;
-  const es=document.getElementById("extra-sede");
-  if(es) es.onchange=function(e){
-    state.extraForm.sede=e.target.value;
-    state.extraForm.docenteId="";
-    render();
-  };
   const ed=document.getElementById("extra-docente");
   if(ed) ed.onchange=function(e){state.extraForm.docenteId=e.target.value;};
   const ef=document.getElementById("extra-fecha");
@@ -609,11 +611,9 @@ function bindModalExtra(){
     if(f.type!=="application/pdf"){setState({extraErr:"Solo PDF."});e.target.value="";return;}
     if(f.size>800*1024){setState({extraErr:"Maximo 800KB. Comprime en ilovepdf.com"});e.target.value="";return;}
     const r=new FileReader();
-    r.onload=function(ev){state.extraForm.archivoNombre=f.name;state.extraForm.archivoData=ev.target.result;state.extraErr="";render();};
+    r.onload=function(ev){state.extraForm.archivoNombre=f.name;state.extraForm.archivoData=ev.target.result;state.extraErr="";render();bindModalExtra();};
     r.readAsDataURL(f);
   };
-  const bs=document.getElementById("btn-extra-save"); if(bs) bs.onclick=crearExtraordinario;
-  const bc=document.getElementById("btn-extra-cancel"); if(bc) bc.onclick=function(){setState({modalExtra:false,extraErr:"",extraOk:"",extraForm:{sede:"",docenteId:"",fecha:"",archivoNombre:"",archivoData:""}});};
 }
 
 // ── MODAL COORDINADOR ──
