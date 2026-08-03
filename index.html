@@ -234,6 +234,11 @@ document.addEventListener("change",function(e){
 
 // ── EVENTO GLOBAL ──
 document.addEventListener("click",async function(e){
+  // Ignorar clicks dentro del modal extraordinario excepto botones especificos
+  if(e.target.closest(".overlay") && !e.target.closest("#btn-extra-save") && !e.target.closest("#btn-extra-cancel") && !e.target.closest("#btn-pw-save") && !e.target.closest("#btn-pw-cancel") && !e.target.closest("#btn-reset-save") && !e.target.closest("#btn-reset-cancel") && !e.target.closest("#btn-coord-save") && !e.target.closest("#btn-coord-cancel") && !e.target.closest("#btn-aprobar") && !e.target.closest("#btn-rechazar") && !e.target.closest("#btn-cancelar-modal")) {
+    // Dejar pasar solo los botones del modal, bloquear el resto
+    if(!e.target.closest("button") && !e.target.closest("a")) return;
+  }
   // Cancelar permiso
   const btnCancelar=e.target.closest(".btn-cancelar-permiso");
   if(btnCancelar){ e.stopPropagation(); await cancelarPermiso(btnCancelar.dataset.id); return; }
