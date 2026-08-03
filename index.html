@@ -219,26 +219,25 @@ async function init(){
 }
 init();
 
-// ── EVENTO GLOBAL CANCELAR ──
+// ── EVENTO GLOBAL ──
 document.addEventListener("click",async function(e){
-  const btn=e.target.closest(".btn-cancelar-permiso");
-  if(btn){ e.stopPropagation(); await cancelarPermiso(btn.dataset.id); return; }
+  // Cancelar permiso
+  const btnCancelar=e.target.closest(".btn-cancelar-permiso");
+  if(btnCancelar){ e.stopPropagation(); await cancelarPermiso(btnCancelar.dataset.id); return; }
 
   // Guardar limites
-  const bsl=e.target.closest("#btn-save-limites");
-  if(bsl){
+  const btnLimites=e.target.closest("#btn-save-limites");
+  if(btnLimites){
     const ginp=document.getElementById("inp-max-general");
     const general=ginp?Number(ginp.value)||5:5;
     const obj={};
     document.querySelectorAll(".inp-sede-limite").forEach(function(inp){
-      const s=inp.dataset.sede;
-      const v=Number(inp.value);
+      const s=inp.dataset.sede; const v=Number(inp.value);
       if(s&&v>0) obj[s]=v;
     });
     try{
       await setDoc(doc(db,COL_CONFIG,"settings"),{maxPerDay:general,limitesSedes:obj});
-      state.maxPerDay=general;
-      state.limitesSedes=obj;
+      state.maxPerDay=general; state.limitesSedes=obj;
       const msg=document.getElementById("limites-msg");
       if(msg){msg.textContent="Guardado correctamente.";msg.style.color="var(--green)";setTimeout(function(){msg.textContent="";},3000);}
     } catch(err){
@@ -248,6 +247,21 @@ document.addEventListener("click",async function(e){
     }
     return;
   }
+
+  // Abrir permiso extraordinario
+  const btnExtra=e.target.closest("#btn-abrir-extra");
+  if(btnExtra){
+    setState({modalExtra:true,extraErr:"",extraOk:"",extraForm:{sede:"",docenteId:"",fecha:"",archivoNombre:"",archivoData:""}});
+    return;
+  }
+
+  // Guardar permiso extraordinario
+  const btnExtraSave=e.target.closest("#btn-extra-save");
+  if(btnExtraSave){ await crearExtraordinario(); return; }
+
+  // Cancelar modal extraordinario
+  const btnExtraCancel=e.target.closest("#btn-extra-cancel");
+  if(btnExtraCancel){ setState({modalExtra:false,extraErr:"",extraOk:"",extraForm:{sede:"",docenteId:"",fecha:"",archivoNombre:"",archivoData:""}}); return; }
 });
 
 // ── AUTH ──
