@@ -219,6 +219,19 @@ async function init(){
 }
 init();
 
+// ── EVENTO GLOBAL CHANGE ──
+document.addEventListener("change",function(e){
+  if(e.target&&e.target.id==="extra-sede"){
+    state.extraForm.sede=e.target.value;
+    state.extraForm.docenteId="";
+    render();
+    bindModalExtra();
+  }
+  if(e.target&&e.target.id==="extra-docente"){
+    state.extraForm.docenteId=e.target.value;
+  }
+});
+
 // ── EVENTO GLOBAL ──
 document.addEventListener("click",async function(e){
   // Cancelar permiso
@@ -248,10 +261,9 @@ document.addEventListener("click",async function(e){
     return;
   }
 
-  // Cambio de sede en extraordinario
-  const btnExtraSede=e.target.closest("#extra-sede");
-  if(btnExtraSede){
-    state.extraForm.sede=btnExtraSede.value;
+  // Cambio de sede en extraordinario - usar change no click
+  if(e.target&&e.target.id==="extra-sede"){
+    state.extraForm.sede=e.target.value;
     state.extraForm.docenteId="";
     render();
     bindModalExtra();
