@@ -125,7 +125,7 @@ let state = {
   filtroDia:"", filtroDocente:"todos", filtroMesDoc:"todos",
   filtroSede:"todos", filtroSedeDia:"todos",
   filtroMesPend:"todos", filtroDocentePend:"todos",
-  filtroFechaExtra:"", filtroDocenteExtra:"todos",
+  filtroFechaExtra:"", filtroDocenteExtra:"todos", filtroSedeExtraPend:"todos",
   loginErr:""
 };
 
@@ -230,7 +230,21 @@ document.addEventListener("change",function(e){
   if(e.target&&e.target.id==="extra-docente"){
     state.extraForm.docenteId=e.target.value;
   }
+  if(e.target&&e.target.id==="fil-sede-extra-pend"){
+    setState({filtroSedeExtraPend:e.target.value});
+  }
+
+document.addEventListener("input",function(e){
+  if(e.target&&e.target.id==="extra-motivo"){
+    state.extraForm.motivo=e.target.value;
+  }
+  if(e.target&&e.target.id==="extra-fecha"){
+    state.extraForm.fecha=e.target.value;
+  }
 });
+
+// Agregar filtro sede extraordinarios pendientes al state
+
 
 // ── EVENTO GLOBAL ──
 document.addEventListener("click",async function(e){
@@ -282,7 +296,11 @@ document.addEventListener("click",async function(e){
 
   // Guardar permiso extraordinario
   const btnExtraSave=e.target.closest("#btn-extra-save");
-  if(btnExtraSave){ await crearExtraordinario(); return; }
+  if(btnExtraSave){
+    if(state.user&&state.user.rol==="docente") await solicitarExtraordinario();
+    else await crearExtraordinario();
+    return;
+  }
 
   // Cancelar modal extraordinario
   const btnExtraCancel=e.target.closest("#btn-extra-cancel");
@@ -453,7 +471,35 @@ async function solicitar(){
   } catch(err){setState({fErr:"Error al guardar. El archivo puede ser muy grande, comprime el PDF en ilovepdf.com"});}
 }
 
-// ── PERMISO EXTRAORDINARIO ──
+// ── SOLICITAR EXTRAORDINARIO (DOCENTE) ──
+async function solicitarExtraordinario(){
+  const ef=state.extraForm; const user=state.user;
+  setState({extraErr:"",extraOk:""});
+  if(!ef.motivo||!ef.motivo.trim()){setState({extraErr:"Escribe el motivo."});return;}
+  if(!ef.fecha){setState({extraErr:"Selecciona una fecha."});return;}
+  if(!ef.archivoData){setState({extraErr:"El soporte PDF es obligatorio."});return;}
+  try{
+    const id="extra_"+Date.now();
+    await setDoc(doc(db,COL_PERMISOS,id),{
+      id:id,
+      docenteId:user.id,
+      docenteNombre:user.nombre,
+      sede:user.sede||"",
+      fecha:ef.fecha,
+      motivo:ef.motivo.trim(),
+      archivoNombre:ef.archivoNombre,
+      archivoData:ef.archivoData,
+      estado:"pendiente",
+      observacion:"",
+      ts:new Date().toISOString(),
+      extraordinario:true,
+      creadoPor:user.nombre
+    });
+    setState({modalExtra:false,extraForm:{sede:"",motivo:"",docenteId:"",fecha:"",archivoNombre:"",archivoData:""},extraErr:"",extraOk:""});
+  } catch(e){setState({extraErr:"Error al guardar."});console.error(e);}
+}
+
+// ── CREAR EXTRAORDINARIO (COORDINADOR) ──
 async function crearExtraordinario(){
   const ef=state.extraForm; const user=state.user;
   setState({extraErr:"",extraOk:""});
@@ -588,6 +634,29 @@ function bindModalReset(){
 function modalExtraHtml(){
   if(!state.modalExtra) return "";
   const ef=state.extraForm; const user=state.user;
+  const esDocente=user.rol==="docente";
+
+  if(esDocente){
+    // Formulario simplificado para docente
+    return '<div class="overlay"><div class="modal"><h3>Solicitud de Permiso Extraordinario</h3>'+
+      '<p style="font-size:12px;color:var(--sub);margin-bottom:16px">Esta solicitud sera revisada por el coordinador de tu sede.</p>'+
+      '<div class="field"><label class="lbl">Fecha</label>'+
+      '<input type="date" class="inp" id="extra-fecha" value="'+ef.fecha+'"/></div>'+
+      '<div class="field"><label class="lbl">Motivo</label>'+
+      '<textarea class="inp" id="extra-motivo" rows="3" placeholder="Describe el motivo del permiso extraordinario...">'+( ef.motivo||"")+'</textarea></div>'+
+      '<div class="field"><label class="lbl">Soporte PDF <span class="required">*</span></label>'+
+      '<input type="file" id="extra-archivo" accept=".pdf"/>'+
+      (!ef.archivoData?'<p style="font-size:11px;color:var(--red);margin-top:3px">Requerido (max. 800KB)</p>':'')+
+      (ef.archivoNombre?'<p style="font-size:11px;color:var(--green);margin-top:3px">'+ef.archivoNombre+'</p>':'')+
+      '</div>'+
+      (state.extraErr?'<p class="msg-err">'+state.extraErr+'</p>':'')+
+      '<div class="modal-btns">'+
+      '<button class="btn btn-primary" style="flex:1" id="btn-extra-save">Enviar solicitud</button>'+
+      '<button class="btn btn-ghost" id="btn-extra-cancel">Cancelar</button>'+
+      '</div></div></div>';
+  }
+
+  // Formulario para coordinador (crea y aprueba directamente)
   const sedesDisp=user.rol==="coordinador"?(user.sedes||[]):[...new Set(state.docentes.map(function(d){return d.sede||"";}).filter(Boolean))].sort();
   const docentesSede=ef.sede?state.docentes.filter(function(d){return d.sede===ef.sede;}):[];
   return '<div class="overlay"><div class="modal"><h3>Permiso Extraordinario</h3>'+
@@ -610,7 +679,6 @@ function modalExtraHtml(){
     (ef.archivoNombre?'<p style="font-size:11px;color:var(--green);margin-top:3px">'+ef.archivoNombre+'</p>':'')+
     '</div>'+
     (state.extraErr?'<p class="msg-err">'+state.extraErr+'</p>':'')+
-    (state.extraOk?'<p class="msg-ok">'+state.extraOk+'</p>':'')+
     '<div class="modal-btns">'+
     '<button class="btn btn-success" style="flex:1" id="btn-extra-save">Aprobar permiso</button>'+
     '<button class="btn btn-ghost" id="btn-extra-cancel">Cancelar</button>'+
@@ -779,7 +847,7 @@ function renderPanel(canApprove){
     }).join('')+
     '</div>'+
     '<div class="tabs">'+
-    [["pendientes","Pendientes ("+pendientes.length+")"],["historial","Historial"],["por-dia","Por dia"],["por-docente","Por docente"],["extraordinarios","Extraordinarios ("+extraordinarios.length+")"]].map(function(t){
+    [["pendientes","Pendientes ("+pendientes.length+")"],["historial","Historial"],["por-dia","Por dia"],["por-docente","Por docente"],["extraordinarios","Extraordinarios ("+extraordinarios.length+")"],["extra-pendientes","Extra. Pendientes ("+(user.rol==="coordinador"?extrasPendCoord.length:0)+")"]].map(function(t){
       return '<button class="tab'+(tab===t[0]?" active":"")+'" data-tab="'+t[0]+'">'+t[1]+'</button>';
     }).join('')+
     '</div>'+
@@ -829,7 +897,41 @@ function renderPanel(canApprove){
       '</div>'
     :"")+
 
-    (tab==="extraordinarios"?
+    (tab==="extra-pendientes"&&user.rol==="coordinador"?
+      '<div class="filtros">'+
+      '<span style="font-size:13px;color:var(--sub)">Fecha:</span>'+
+      '<input type="date" id="fil-fecha-extra" class="inp-sm" value="'+filtroFechaExtra+'"/>'+
+      '<span style="font-size:13px;color:var(--sub)">Docente:</span>'+
+      '<select id="fil-docente-extra" class="inp-sm"><option value="todos">Todos</option>'+
+      [...new Set(extrasPendCoord.map(function(p){return p.docenteNombre;}))].sort().map(function(n){return '<option value="'+n+'" '+(filtroDocenteExtra===n?"selected":"")+'>'+n+'</option>';}).join('')+
+      '</select>'+
+      '<span style="font-size:13px;color:var(--sub)">Sede:</span>'+
+      '<select id="fil-sede-extra-pend" class="inp-sm"><option value="todos">Todas</option>'+
+      (user.sedes||[]).map(function(s){return '<option value="'+s+'">'+s+'</option>';}).join('')+
+      '</select>'+
+      '</div>'+
+      (extrasPendCoord.length===0?'<p style="font-size:13px;color:var(--sub)">No hay solicitudes extraordinarias pendientes.</p>':'')+
+      extrasPendCoord.filter(function(p){
+        return (filtroFechaExtra===""||p.fecha===filtroFechaExtra)&&
+               (filtroDocenteExtra==="todos"||p.docenteNombre===filtroDocenteExtra)&&
+               (state.filtroSedeExtraPend==="todos"||(p.sede||"")===state.filtroSedeExtraPend);
+      }).map(function(p){
+        return '<div class="perm-row" style="border-left:3px solid #059669">'+
+          '<div>'+
+          '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">'+
+          '<p style="font-weight:500;margin:0">'+p.docenteNombre+'</p>'+
+          '<span class="badge" style="background:#D1FAE5;color:#065F46;font-size:10px">EXTRAORDINARIO</span>'+
+          '</div>'+
+          '<p style="font-size:12px;color:var(--sub)">'+(p.sede?p.sede+" - ":"")+fmtDate(p.fecha)+'</p>'+
+          '<p style="font-size:12px;color:var(--sub)">'+p.motivo+'</p>'+
+          (p.archivoData?'<a href="'+p.archivoData+'" download="'+p.archivoNombre+'" style="font-size:11px">Ver PDF</a>':'')+
+          '</div>'+
+          '<div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">'+
+          '<button class="btn btn-success btn-sm btn-aprobar-extra" data-id="'+p.id+'">Aprobar</button>'+
+          '<button class="btn btn-danger btn-sm btn-rechazar-extra" data-id="'+p.id+'">Rechazar</button>'+
+          '</div></div>';
+      }).join('')
+    :"")+
       '<div class="filtros">'+
       '<span style="font-size:13px;color:var(--sub)">Fecha:</span>'+
       '<input type="date" id="fil-fecha-extra" class="inp-sm" value="'+filtroFechaExtra+'"/>'+
@@ -1026,10 +1128,13 @@ function renderDocente(){
   const hoy=new Date();
   const hoyStr=hoy.getFullYear()+"-"+String(hoy.getMonth()+1).padStart(2,"0")+"-"+String(hoy.getDate()).padStart(2,"0");
 
-  return topbarHtml()+
+      // Lista extraordinarios del docente
+    const misExtras=misPermisos.filter(function(p){return p.extraordinario;});
+
+    return topbarHtml()+
     '<div class="page">'+
     '<div class="stat-grid">'+
-    [["Usados este mes",usadosMes+"/3"],["Total enviados",misPermisos.length],["Aprobados",misPermisos.filter(function(p){return p.estado==="aprobado";}).length]].map(function(s){
+    [["Usados este mes",usadosMes+"/3"],["Total enviados",misPermisos.filter(function(p){return !p.extraordinario;}).length],["Aprobados",misPermisos.filter(function(p){return p.estado==="aprobado"&&!p.extraordinario;}).length]].map(function(s){
       return '<div class="stat"><p class="stat-label">'+s[0]+'</p><p class="stat-val">'+s[1]+'</p></div>';
     }).join('')+
     '</div>'+
@@ -1073,6 +1178,8 @@ function bindDocente(){
     r.onload=function(ev){state.form.archivoNombre=f.name;state.form.archivoData=ev.target.result;state.fErr="";render();};
     r.readAsDataURL(f);
   };
+  const bae=document.getElementById("btn-abrir-extra");
+  if(bae) bae.onclick=function(){setState({modalExtra:true,extraErr:"",extraOk:"",extraForm:{sede:"",motivo:"",docenteId:"",fecha:"",archivoNombre:"",archivoData:""}});};
   const bs=document.getElementById("btn-solicitar"); if(bs) bs.onclick=solicitar;
   const fmd=document.getElementById("fil-mes-doc"); if(fmd) fmd.onchange=function(e){setState({filtroMesDocente:e.target.value});};
 }
