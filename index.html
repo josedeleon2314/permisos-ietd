@@ -243,9 +243,6 @@ document.addEventListener("input",function(e){
   }
 });
 
-// Agregar filtro sede extraordinarios pendientes al state
-
-
 // ── EVENTO GLOBAL ──
 document.addEventListener("click",async function(e){
   // Ignorar clicks dentro del modal extraordinario excepto botones especificos
@@ -253,6 +250,12 @@ document.addEventListener("click",async function(e){
     // Dejar pasar solo los botones del modal, bloquear el resto
     if(!e.target.closest("button") && !e.target.closest("a")) return;
   }
+  // Botones limpiar filtros via listener global
+  const btnClearDia=e.target.closest("#btn-clear-dia");
+  if(btnClearDia){ setState({filtroDia:"",filtroSedeDia:"todos"}); return; }
+  const btnClearExtra=e.target.closest("#btn-clear-extra");
+  if(btnClearExtra){ setState({filtroFechaExtra:"",filtroDocenteExtra:"todos"}); return; }
+
   // Cancelar permiso
   const btnCancelar=e.target.closest(".btn-cancelar-permiso");
   if(btnCancelar){ e.stopPropagation(); await cancelarPermiso(btnCancelar.dataset.id); return; }
