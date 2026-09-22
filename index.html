@@ -115,7 +115,7 @@ let state = {
   modalExtra:false,
   extraForm:{sede:"",docenteId:"",fecha:"",archivoNombre:"",archivoData:""},
   extraErr:"", extraOk:"",
-  form:{fecha:"",motivo:"",archivoNombre:"",archivoData:""},
+  form:{fecha:"",motivo:"",archivoNombre:"",archivoData:"",tipo:"normal"},
   fErr:"", fOk:"",
   pw:{actual:"",nueva:"",confirmar:""}, pwErr:"", pwOk:"",
   resetPw:{nueva:"",confirmar:""}, resetErr:"", resetOk:"",
@@ -152,6 +152,23 @@ function badge(estado){
 }
 function rolLabel(r){ return {admin:"Administrador",rector:"Rector",docente:"Docente",coordinador:"Coordinador"}[r]||r; }
 function todasSedesDisp(){ return [...new Set(state.docentes.map(function(d){return d.sede||"";}).filter(Boolean))].sort(); }
+// ── EXTRAORDINARIOS: quien decide ──
+function coordsDeSede(sede){
+  return (state.coordinadores||[]).filter(function(c){return c.sedes&&c.sedes.includes(sede||"Sin sede");});
+}
+function puedeDecidir(p,user){
+  if(!p||!user) return false;
+  const sede=p.sede||"Sin sede";
+  if(user.rol==="coordinador") return !!(user.sedes&&user.sedes.includes(sede));
+  if(user.rol==="rector"){
+    // Los extraordinarios los aprueba el coordinador de la sede;
+    // el rector solo puede hacerlo si la sede no tiene coordinador asignado
+    if(p.extraordinario) return coordsDeSede(sede).length===0;
+    return true;
+  }
+  return false;
+}
+function badgeExtra(){ return '<span class="badge" style="background:#D1FAE5;color:#065F46;font-size:10px">EXTRAORDINARIO</span>'; }
 function getLimiteSede(sede){ return (state.limitesSedes&&state.limitesSedes[sede]) ? state.limitesSedes[sede] : state.maxPerDay; }
 
 // ── FIREBASE ──
@@ -298,7 +315,7 @@ function login(){
   if(!u){setState({loginErr:"Documento o contrasena incorrectos."});return;}
   setState({user:u,loginErr:""});
 }
-function logout(){ setState({user:null,tab:"pendientes",modalPw:false,form:{fecha:"",motivo:"",archivoNombre:"",archivoData:""}}); }
+function logout(){ setState({user:null,tab:"pendientes",modalPw:false,form:{fecha:"",motivo:"",archivoNombre:"",archivoData:"",tipo:"normal"}}); }
 
 // ── CONTRASENAS ──
 async function cambiarPw(){
@@ -434,12 +451,24 @@ async function solicitar(){
   setState({fErr:"",fOk:""});
   if(!form.fecha||!form.motivo.trim()){setState({fErr:"Completa fecha y motivo."});return;}
   if(!form.archivoData){setState({fErr:"El documento adjunto en PDF es obligatorio."});return;}
+  if(form.tipo==="extraordinario"){
+    const sedeDoc=user.sede||"";
+    const yaTiene=permisos.some(function(p){return p.docenteId===user.id&&p.fecha===form.fecha&&(p.estado==="pendiente"||p.estado==="aprobado");});
+    if(yaTiene){setState({fErr:"Ya tienes una solicitud pendiente o aprobada para el "+fmtDate(form.fecha)+"."});return;}
+    try{
+      const id="extra_"+Date.now();
+      await setDoc(doc(db,COL_PERMISOS,id),{id:id,docenteId:user.id,docenteNombre:user.nombre,sede:sedeDoc,fecha:form.fecha,motivo:form.motivo,archivoNombre:form.archivoNombre,archivoData:form.archivoData,estado:"pendiente",observacion:"",ts:new Date().toISOString(),extraordinario:true,creadoPor:user.nombre,solicitadoPorDocente:true});
+      const coords=coordsDeSede(sedeDoc).map(function(c){return c.nombre;});
+      setState({form:{fecha:"",motivo:"",archivoNombre:"",archivoData:"",tipo:"normal"},fOk:"Permiso extraordinario enviado. Lo revisara "+(coords.length?"el coordinador de tu sede ("+coords.join(", ")+")":"el rector (tu sede no tiene coordinador asignado)")+"."});
+    } catch(err){setState({fErr:"Error al guardar. El archivo puede ser muy grande, comprime el PDF en ilovepdf.com"});}
+    return;
+  }
   const mesKey=getMonthKey(form.fecha);
-  const enMes=permisos.filter(function(p){return p.docenteId===user.id&&getMonthKey(p.fecha)===mesKey&&p.estado!=="rechazado"&&p.estado!=="cancelado";});
+  const enMes=permisos.filter(function(p){return p.docenteId===user.id&&!p.extraordinario&&getMonthKey(p.fecha)===mesKey&&p.estado!=="rechazado"&&p.estado!=="cancelado";});
   if(enMes.length>=3){setState({fErr:"Ya tienes 3 permisos este mes."});return;}
   const sedDocente=user.sede||"";
   const limSede=getLimiteSede(sedDocente);
-  const enDia=permisos.filter(function(p){return p.fecha===form.fecha&&(p.estado==="pendiente"||p.estado==="aprobado")&&(p.sede||"")===sedDocente;});
+  const enDia=permisos.filter(function(p){return !p.extraordinario&&p.fecha===form.fecha&&(p.estado==="pendiente"||p.estado==="aprobado")&&(p.sede||"")===sedDocente;});
   if(enDia.length>=limSede){
     const aprobados=enDia.filter(function(p){return p.estado==="aprobado";}).length;
     const pendientes=enDia.filter(function(p){return p.estado==="pendiente";}).length;
@@ -449,7 +478,7 @@ async function solicitar(){
   try{
     const id=Date.now();
     await savePermiso({id:id,docenteId:user.id,docenteNombre:user.nombre,sede:user.sede||"",fecha:form.fecha,motivo:form.motivo,archivoNombre:form.archivoNombre,archivoData:form.archivoData,estado:"pendiente",observacion:"",ts:new Date().toISOString()});
-    setState({form:{fecha:"",motivo:"",archivoNombre:"",archivoData:""},fOk:"Solicitud enviada correctamente."});
+    setState({form:{fecha:"",motivo:"",archivoNombre:"",archivoData:"",tipo:"normal"},fOk:"Solicitud enviada correctamente."});
   } catch(err){setState({fErr:"Error al guardar. El archivo puede ser muy grande, comprime el PDF en ilovepdf.com"});}
 }
 
@@ -487,17 +516,20 @@ async function crearExtraordinario(){
 // ── DECIDIR ──
 async function decidir(id,estado){
   const permisos=state.permisos; const user=state.user; const maxPerDay=state.maxPerDay;
-  if(estado==="aprobado"){
-    const p=permisos.find(function(x){return x.id===id;});
+  const pd=permisos.find(function(x){return String(x.id)===String(id);});
+  if(!puedeDecidir(pd,user)){
+    alert(pd&&pd.extraordinario?"Este permiso extraordinario debe decidirlo el coordinador de la sede "+(pd.sede||"Sin sede")+".":"No tienes permiso para decidir solicitudes de esta sede.");return;
+  }
+  if(estado==="aprobado"&&!pd.extraordinario){
+    const p=pd;
     const sede=p?p.sede||"":"";
-    if(user.rol==="coordinador"&&user.sedes&&!user.sedes.includes(sede)){
-      alert("No tienes permiso para aprobar solicitudes de la sede "+sede);return;
-    }
-    const aprobadosDia=permisos.filter(function(x){return x.fecha===p.fecha&&x.estado==="aprobado"&&(x.sede||"")===sede;}).length;
+    const aprobadosDia=permisos.filter(function(x){return !x.extraordinario&&x.fecha===p.fecha&&x.estado==="aprobado"&&(x.sede||"")===sede;}).length;
     const limSede=getLimiteSede(sede);
     if(aprobadosDia>=limSede){alert("Limite de "+limSede+" permisos/dia para la sede "+sede+" alcanzado.");return;}
   }
-  await updatePermiso(id,{estado:estado,observacion:state.modalObs});
+  const cambios={estado:estado,observacion:state.modalObs};
+  if(pd.extraordinario){cambios.decididoPor=user.nombre;}
+  await updatePermiso(id,cambios);
   setState({modalPermiso:null,modalObs:""});
 }
 
@@ -516,7 +548,7 @@ function derived(){
     if(user&&user.rol==="coordinador") return user.sedes&&user.sedes.includes(p.sede||"Sin sede");
     return true;
   });
-  const usadosMes=user?permisos.filter(function(p){return p.docenteId===user.id&&getMonthKey(p.fecha)===getMonthKey(new Date().toISOString())&&p.estado!=="rechazado"&&p.estado!=="cancelado";}).length:0;
+  const usadosMes=user?permisos.filter(function(p){return p.docenteId===user.id&&!p.extraordinario&&getMonthKey(p.fecha)===getMonthKey(new Date().toISOString())&&p.estado!=="rechazado"&&p.estado!=="cancelado";}).length:0;
   return {misPermisos:misPerm,pendientes:pendientes,historialR:historialR,usadosMes:usadosMes};
 }
 
@@ -763,9 +795,9 @@ function renderPanel(canApprove){
   let modalHtml="";
   if(modalPermiso&&canApprove){
     const p=modalPermiso; const sede=p.sede||"";
-    const aprobadosDia=permisos.filter(function(x){return x.fecha===p.fecha&&x.estado==="aprobado"&&(x.sede||"")===sede;}).length;
+    const aprobadosDia=permisos.filter(function(x){return !x.extraordinario&&x.fecha===p.fecha&&x.estado==="aprobado"&&(x.sede||"")===sede;}).length;
     const limSede=getLimiteSede(sede); const restantes=limSede-aprobadosDia;
-    modalHtml='<div class="overlay"><div class="modal"><h3>Revisar solicitud</h3><div class="modal-info"><p><b>'+p.docenteNombre+'</b></p>'+(p.sede?'<p style="color:var(--sub)">Sede: '+p.sede+'</p>':'')+'<p style="color:var(--sub)">Fecha: '+fmtDate(p.fecha)+'</p><p style="color:var(--sub)">Motivo: '+p.motivo+'</p>'+(p.archivoData?'<a href="'+p.archivoData+'" download="'+p.archivoNombre+'" style="font-size:12px">Descargar PDF</a>':'')+'<p style="font-size:12px;margin-top:6px;color:'+(restantes<=0?"var(--red)":"var(--green)")+';font-weight:500">'+(restantes<=0?"Limite de sede alcanzado ("+limSede+"/"+limSede+")":"Cupos disponibles en sede: "+restantes)+'</p></div><div class="field"><label class="lbl">Observacion (opcional)</label><textarea id="modal-obs" class="inp" rows="3" placeholder="Escribe una observacion...">'+modalObs+'</textarea></div><div class="modal-btns"><button class="btn btn-success" style="flex:1" id="btn-aprobar">Aprobar</button><button class="btn btn-danger" style="flex:1" id="btn-rechazar">Rechazar</button><button class="btn btn-ghost" id="btn-cancelar-modal">Cancelar</button></div></div></div>';
+    modalHtml='<div class="overlay"><div class="modal"><h3>'+(p.extraordinario?'Revisar permiso extraordinario':'Revisar solicitud')+'</h3><div class="modal-info"><p><b>'+p.docenteNombre+'</b></p>'+(p.sede?'<p style="color:var(--sub)">Sede: '+p.sede+'</p>':'')+'<p style="color:var(--sub)">Fecha: '+fmtDate(p.fecha)+'</p><p style="color:var(--sub)">Motivo: '+p.motivo+'</p>'+(p.archivoData?'<a href="'+p.archivoData+'" download="'+p.archivoNombre+'" style="font-size:12px">Descargar PDF</a>':'')+(p.extraordinario?'<p style="font-size:12px;margin-top:6px;color:#065F46;font-weight:500">Permiso extraordinario: no afecta el cupo diario ni el limite mensual.</p>':'<p style="font-size:12px;margin-top:6px;color:'+(restantes<=0?"var(--red)":"var(--green)")+';font-weight:500">'+(restantes<=0?"Limite de sede alcanzado ("+limSede+"/"+limSede+")":"Cupos disponibles en sede: "+restantes)+'</p>')+'</div><div class="field"><label class="lbl">Observacion (opcional)</label><textarea id="modal-obs" class="inp" rows="3" placeholder="Escribe una observacion...">'+modalObs+'</textarea></div><div class="modal-btns"><button class="btn btn-success" style="flex:1" id="btn-aprobar">Aprobar</button><button class="btn btn-danger" style="flex:1" id="btn-rechazar">Rechazar</button><button class="btn btn-ghost" id="btn-cancelar-modal">Cancelar</button></div></div></div>';
   }
 
   const aprobadosTotal=permisos.filter(function(p){return p.estado==="aprobado"&&(user.rol!=="coordinador"||user.sedes.includes(p.sede||"Sin sede"));}).length;
@@ -795,7 +827,7 @@ function renderPanel(canApprove){
       '<p style="font-size:12px;color:var(--sub);margin-bottom:12px">'+pendientesFiltrados.length+' solicitud(es)</p>'+
       (pendientesFiltrados.length===0?'<p style="font-size:13px;color:var(--sub)">No hay solicitudes con estos filtros.</p>':'')+
       pendientesFiltrados.map(function(p){
-        return '<div class="perm-row"><div><p style="font-weight:500">'+p.docenteNombre+'</p><p style="font-size:12px;color:var(--sub)">'+(p.sede?p.sede+" - ":"")+fmtDate(p.fecha)+" - "+p.motivo+'</p>'+(p.archivoData?'<a href="'+p.archivoData+'" download="'+p.archivoNombre+'" style="font-size:11px">Ver PDF</a>':'')+'</div>'+(canApprove?'<button class="btn btn-primary btn-sm btn-revisar" data-id="'+p.id+'">Revisar</button>':badge("pendiente"))+'</div>';
+        return '<div class="perm-row"'+(p.extraordinario?' style="border-left:3px solid #059669"':'')+'><div><div style="display:flex;align-items:center;gap:8px"><p style="font-weight:500;margin:0">'+p.docenteNombre+'</p>'+(p.extraordinario?badgeExtra():'')+'</div><p style="font-size:12px;color:var(--sub)">'+(p.sede?p.sede+" - ":"")+fmtDate(p.fecha)+" - "+p.motivo+'</p>'+(p.archivoData?'<a href="'+p.archivoData+'" download="'+p.archivoNombre+'" style="font-size:11px">Ver PDF</a>':'')+'</div>'+(canApprove&&puedeDecidir(p,user)?'<button class="btn btn-primary btn-sm btn-revisar" data-id="'+p.id+'">Revisar</button>':(p.extraordinario?'<span style="font-size:11px;color:var(--sub);text-align:right">Espera al coordinador<br>de la sede</span>':badge("pendiente")))+'</div>';
       }).join('')
     :"")+
 
@@ -848,9 +880,11 @@ function renderPanel(canApprove){
           '<span class="badge" style="background:#D1FAE5;color:#065F46;font-size:10px">EXTRAORDINARIO</span>'+
           '</div>'+
           '<p style="font-size:12px;color:var(--sub)">'+(p.sede?p.sede+" - ":"")+fmtDate(p.fecha)+'</p>'+
-          (p.creadoPor?'<p style="font-size:11px;color:var(--sub)">Creado por: '+p.creadoPor+'</p>':'')+
+          (p.solicitadoPorDocente?'<p style="font-size:11px;color:var(--sub)">Solicitado por el docente'+(p.motivo?' - '+p.motivo:'')+'</p>':(p.creadoPor?'<p style="font-size:11px;color:var(--sub)">Creado por: '+p.creadoPor+'</p>':''))+
+          (p.decididoPor?'<p style="font-size:11px;color:var(--sub)">'+(p.estado==="rechazado"?"Rechazado":"Aprobado")+' por: '+p.decididoPor+'</p>':'')+
+          (p.observacion&&p.solicitadoPorDocente?'<p style="font-size:11px;color:var(--sub)">Obs: '+p.observacion+'</p>':'')+
           (p.archivoData?'<a href="'+p.archivoData+'" download="'+p.archivoNombre+'" style="font-size:11px">Ver PDF</a>':'')+
-          '</div>'+badge("aprobado")+'</div>';
+          '</div>'+(p.estado==="pendiente"&&puedeDecidir(p,user)?'<button class="btn btn-primary btn-sm btn-revisar" data-id="'+p.id+'">Revisar</button>':badge(p.estado||"aprobado"))+'</div>';
       }).join('')
     :"")+
 
@@ -1034,6 +1068,11 @@ function renderDocente(){
     }).join('')+
     '</div>'+
     '<div class="card"><p style="font-size:14px;font-weight:500;margin-bottom:16px">Nueva solicitud de permiso</p>'+
+    '<div class="field"><label class="lbl">Tipo de permiso</label><select id="f-tipo" class="inp">'+
+    '<option value="normal" '+(form.tipo!=="extraordinario"?"selected":"")+'>Permiso ordinario</option>'+
+    '<option value="extraordinario" '+(form.tipo==="extraordinario"?"selected":"")+'>Permiso extraordinario</option></select>'+
+    (form.tipo==="extraordinario"?'<p style="font-size:12px;color:#065F46;margin-top:4px">No cuenta en tu limite de 3 permisos al mes ni en el cupo diario de la sede. Lo aprueba el coordinador de tu sede.</p>':'')+
+    '</div>'+
     '<div class="grid2">'+
     '<div class="field"><label class="lbl">Fecha</label><input type="date" id="f-fecha" class="inp" value="'+form.fecha+'"/></div>'+
     '<div class="field"><label class="lbl">Adjunto PDF <span class="required">*</span></label><input type="file" id="f-archivo" accept=".pdf"/>'+
@@ -1052,7 +1091,7 @@ function renderDocente(){
     (histF.length===0?'<p style="font-size:13px;color:var(--sub)">No hay permisos para mostrar.</p>':'')+
     histF.map(function(p){
       const puedeCancelar=(p.estado==="pendiente"||p.estado==="aprobado")&&p.fecha>hoyStr;
-      return '<div class="perm-row"><div><p style="font-weight:500">'+fmtDate(p.fecha)+'</p><p style="font-size:12px;color:var(--sub)">'+p.motivo+'</p>'+(p.archivoData?'<a href="'+p.archivoData+'" download="'+p.archivoNombre+'" style="font-size:11px">Descargar PDF</a>':'')+(p.observacion?'<p style="font-size:11px;color:var(--sub)">Obs: '+p.observacion+'</p>':'')+'</div>'+
+      return '<div class="perm-row"><div><div style="display:flex;align-items:center;gap:8px"><p style="font-weight:500;margin:0">'+fmtDate(p.fecha)+'</p>'+(p.extraordinario?badgeExtra():'')+'</div><p style="font-size:12px;color:var(--sub)">'+p.motivo+'</p>'+(p.archivoData?'<a href="'+p.archivoData+'" download="'+p.archivoNombre+'" style="font-size:11px">Descargar PDF</a>':'')+(p.observacion?'<p style="font-size:11px;color:var(--sub)">Obs: '+p.observacion+'</p>':'')+'</div>'+
         '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">'+badge(p.estado)+
         (puedeCancelar?'<button class="btn btn-danger btn-sm btn-cancelar-permiso" data-id="'+p.id+'" style="font-size:11px;padding:4px 10px">Cancelar</button>':'')+
         '</div></div>';
@@ -1064,6 +1103,7 @@ function bindDocente(){
   bindTopbar(); bindModalPw();
   const ff=document.getElementById("f-fecha"); if(ff) ff.oninput=function(e){state.form.fecha=e.target.value;};
   const fm=document.getElementById("f-motivo"); if(fm) fm.oninput=function(e){state.form.motivo=e.target.value;};
+  const ft=document.getElementById("f-tipo"); if(ft) ft.onchange=function(e){state.form.tipo=e.target.value;setState({fErr:"",fOk:""});};
   const fa=document.getElementById("f-archivo");
   if(fa) fa.onchange=function(e){
     const f=e.target.files[0]; if(!f) return;
