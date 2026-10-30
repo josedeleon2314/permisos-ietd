@@ -255,24 +255,22 @@ async function loadConfig(){
 function ordenarPorTs(lista){
   return lista.sort(function(a,b){return String(b.ts||"").localeCompare(String(a.ts||""));});
 }
-// Escucha solo los permisos que le corresponden al usuario
 function listenPermisos(user){
   stopPermisos();
   const col=collection(db,COL_PERMISOS);
   let q;
   if(user.rol==="docente"){
     q=query(col,where("docenteId","==",user.id));
-  } else if(user.rol==="coordinador"){
-    const sedes=(user.sedes||[]).slice();
-    if(sedes.includes("Sin sede")) sedes.push("");
-    if(sedes.length===0){state.permisos=[];return;}
-    const vals=variantesSede(sedes);
-    q=vals.length<=30 ? query(col,where("sede","in",vals)) : query(col,orderBy("ts","desc"));
   } else {
     q=query(col,orderBy("ts","desc"));
   }
   unsubPermisos=onSnapshot(q,function(snap){
-    state.permisos=ordenarPorTs(snap.docs.map(function(d){return normalizarPermiso(d.data());}));
+    let lista=snap.docs.map(function(d){return normalizarPermiso(d.data());});
+    if(user.rol==="coordinador"){
+      const mis=(user.sedes||[]).map(normSede);
+      lista=lista.filter(function(p){return mis.includes(p.sede||"Sin sede");});
+    }
+    state.permisos=ordenarPorTs(lista);
     render();
   },avisarErrorDatos);
 }
