@@ -84,7 +84,7 @@
 <div id="app"><div class="loading">Cargando sistema...</div></div>
 <script type="module">
 import { initializeApp } from "firebase/app";
-import { getFirestore, collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, onSnapshot, query, orderBy, where, limit } from "firebase/firestore";
+import { getFirestore, collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, onSnapshot, query, orderBy, where, limit, startAfter, deleteField } from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAMKOjybLiBmcuws8r5kMitWAH1hHkGNJM",
@@ -102,6 +102,7 @@ const COL_PERMISOS = "permisos";
 const COL_CONFIG   = "config";
 const COL_SYSUSERS = "sysusers";
 const COL_COORDS   = "coordinadores";
+const COL_ADJ      = "adjuntos";
 
 let state = {
   user:null, sysUsers:[], docentes:[], permisos:[], coordinadores:[],
@@ -126,7 +127,7 @@ let state = {
   filtroSede:"todos", filtroSedeDia:"todos",
   filtroMesPend:"todos", filtroDocentePend:"todos",
   filtroFechaExtra:"", filtroDocenteExtra:"todos",
-  loginErr:""
+  loginErr:"", cargandoPermisos:false, migraMsg:{type:"",text:""}, migrando:false
 };
 
 function setState(p){ Object.assign(state,p); render(); }
@@ -197,6 +198,66 @@ function normalizarUsuario(u){
   if(u.sede!==undefined) u.sede=normSede(u.sede);
   return u;
 }
+// ── ADJUNTOS ──
+// Los permisos ya decididos guardan su PDF en la coleccion "adjuntos"
+function linkPdf(p,texto,size){
+  if(p.archivoData) return '<a href="'+p.archivoData+'" download="'+(p.archivoNombre||"soporte.pdf")+'" style="font-size:'+size+'">'+texto+'</a>';
+  if(p.tieneAdjunto) return '<a href="#" class="ver-adjunto" data-id="'+p.id+'" style="font-size:'+size+'">'+texto+'</a>';
+  return "";
+}
+async function descargarAdjunto(id){
+  try{
+    const snap=await getDoc(doc(db,COL_ADJ,String(id)));
+    if(!snap.exists()){alert("No se encontro el PDF de este permiso.");return;}
+    const a=snap.data();
+    const link=document.createElement("a");
+    link.href=a.archivoData; link.download=a.archivoNombre||"soporte.pdf";
+    document.body.appendChild(link); link.click(); link.remove();
+  } catch(e){console.error(e);alert("No se pudo descargar el PDF. Intenta de nuevo.");}
+}
+// Copia el PDF a "adjuntos" y devuelve los cambios para quitarlo del permiso
+async function moverAdjunto(p){
+  if(!p||!p.archivoData) return {};
+  await setDoc(doc(db,COL_ADJ,String(p.id)),{id:String(p.id),archivoNombre:p.archivoNombre||"soporte.pdf",archivoData:p.archivoData});
+  return {archivoData:deleteField(),tieneAdjunto:true};
+}
+// Migracion unica: mueve los PDF de los permisos ya decididos
+async function migrarAdjuntos(){
+  if(state.migrando) return;
+  if(!confirm("Se moveran los PDF de los permisos aprobados, rechazados y cancelados a una coleccion aparte. Puede tardar varios minutos. Continuar?")) return;
+  setState({migrando:true,migraMsg:{type:"",text:"Iniciando..."}});
+  let movidos=0, revisados=0;
+  try{
+    for(const estado of ["aprobado","rechazado","cancelado"]){
+      let ultimo=null;
+      while(true){
+        const q=ultimo
+          ? query(collection(db,COL_PERMISOS),where("estado","==",estado),startAfter(ultimo),limit(15))
+          : query(collection(db,COL_PERMISOS),where("estado","==",estado),limit(15));
+        const snap=await getDocs(q);
+        if(snap.empty) break;
+        for(const d of snap.docs){
+          const p=d.data(); revisados++;
+          if(p.archivoData){
+            const cambios=await moverAdjunto(Object.assign({id:d.id},p));
+            await updateDoc(d.ref,cambios);
+            movidos++;
+          }
+        }
+        ultimo=snap.docs[snap.docs.length-1];
+        setState({migraMsg:{type:"",text:"Revisados "+revisados+" permisos, "+movidos+" PDF movidos..."}});
+      }
+    }
+    setState({migrando:false,migraMsg:{type:"ok",text:"Listo: revisados "+revisados+" permisos, "+movidos+" PDF movidos."}});
+  } catch(e){
+    console.error(e);
+    setState({migrando:false,migraMsg:{type:"err",text:"Se detuvo con error ("+(e.code||e.message)+"). Revisados "+revisados+", movidos "+movidos+". Puedes volver a ejecutarlo: continua donde quedo."}});
+  }
+}
+function avisoCarga(){
+  return state.cargandoPermisos?'<p style="font-size:13px;color:var(--blue);margin-bottom:12px">Cargando permisos...</p>':'';
+}
+
 function avisarErrorDatos(err){
   console.error("Firestore:",err);
   alert("No se pudieron cargar los permisos.\n\nDetalle: "+(err&&err.code?err.code+" - ":"")+(err&&err.message?err.message:err));
@@ -223,14 +284,9 @@ async function loadDocentes(){
 }
 async function loadDocentesDeSedes(sedes){
   if(!sedes||sedes.length===0){state.docentes=[];return;}
-  if(sedes.length>30){await loadDocentes();return;}
-  const vals=variantesSede(sedes);
-  if(vals.length>30){await loadDocentes();}
-  else{
-    const snap=await getDocs(query(collection(db,COL_DOCENTES),where("sede","in",vals)));
-    state.docentes=snap.docs.map(function(d){return d.data();});
-  }
-  state.docentes.forEach(function(d){d.sede=normSede(d.sede);});
+  await loadDocentes();
+  const mis=sedes.map(normSede);
+  state.docentes=state.docentes.map(function(d){d.sede=normSede(d.sede);return d;}).filter(function(d){return mis.includes(d.sede);});
 }
 async function loadCoordinadores(){
   const snap=await getDocs(collection(db,COL_COORDS));
@@ -255,16 +311,25 @@ async function loadConfig(){
 function ordenarPorTs(lista){
   return lista.sort(function(a,b){return String(b.ts||"").localeCompare(String(a.ts||""));});
 }
+// Escucha solo los permisos que le corresponden al usuario
 function listenPermisos(user){
   stopPermisos();
   const col=collection(db,COL_PERMISOS);
   let q;
   if(user.rol==="docente"){
     q=query(col,where("docenteId","==",user.id));
+  } else if(user.rol==="coordinador"){
+    const sedes=(user.sedes||[]).slice();
+    if(sedes.includes("Sin sede")) sedes.push("");
+    if(sedes.length===0){state.permisos=[];return;}
+    const vals=variantesSede(sedes);
+    q=vals.length<=30 ? query(col,where("sede","in",vals)) : query(col,orderBy("ts","desc"));
   } else {
     q=query(col,orderBy("ts","desc"));
   }
+  state.cargandoPermisos=true;
   unsubPermisos=onSnapshot(q,function(snap){
+    state.cargandoPermisos=false;
     let lista=snap.docs.map(function(d){return normalizarPermiso(d.data());});
     if(user.rol==="coordinador"){
       const mis=(user.sedes||[]).map(normSede);
@@ -272,7 +337,7 @@ function listenPermisos(user){
     }
     state.permisos=ordenarPorTs(lista);
     render();
-  },avisarErrorDatos);
+  },function(err){state.cargandoPermisos=false;render();avisarErrorDatos(err);});
 }
 function stopPermisos(){
   if(unsubPermisos){unsubPermisos();unsubPermisos=null;}
@@ -336,6 +401,11 @@ document.addEventListener("click",async function(e){
     // Dejar pasar solo los botones del modal, bloquear el resto
     if(!e.target.closest("button") && !e.target.closest("a")) return;
   }
+  // Descargar PDF guardado en "adjuntos"
+  const verAdj=e.target.closest(".ver-adjunto");
+  if(verAdj){ e.preventDefault(); await descargarAdjunto(verAdj.dataset.id); return; }
+  // Migrar adjuntos (admin)
+  if(e.target.closest("#btn-migrar-adj")){ await migrarAdjuntos(); return; }
   // Cancelar permiso
   const btnCancelar=e.target.closest(".btn-cancelar-permiso");
   if(btnCancelar){ e.stopPropagation(); await cancelarPermiso(btnCancelar.dataset.id); return; }
@@ -412,7 +482,7 @@ async function login(){
     setState({loginErr:"No se pudo conectar. Intenta de nuevo en unos minutos."});
   }
 }
-function logout(){ stopPermisos(); state.permisos=[]; state.docentes=[]; state.coordinadores=[]; state.sysUsers=[]; setState({user:null,tab:"pendientes",modalPw:false,form:{fecha:"",motivo:"",archivoNombre:"",archivoData:"",tipo:"normal"}}); }
+function logout(){ stopPermisos(); state.cargandoPermisos=false; state.permisos=[]; state.docentes=[]; state.coordinadores=[]; state.sysUsers=[]; setState({user:null,tab:"pendientes",modalPw:false,form:{fecha:"",motivo:"",archivoNombre:"",archivoData:"",tipo:"normal"}}); }
 
 // ── CONTRASENAS ──
 async function cambiarPw(){
@@ -538,7 +608,10 @@ async function cancelarPermiso(id){
   const hoyStr=hoy.getFullYear()+"-"+String(hoy.getMonth()+1).padStart(2,"0")+"-"+String(hoy.getDate()).padStart(2,"0");
   if(p.fecha<=hoyStr){alert("Solo puedes cancelar hasta el dia anterior.");return;}
   if(!confirm("Cancelar el permiso del "+fmtDate(p.fecha)+"?")) return;
-  try{await updateDoc(doc(db,COL_PERMISOS,String(p.id)),{estado:"cancelado"});}
+  try{
+    const cambios=Object.assign({estado:"cancelado"},await moverAdjunto(p));
+    await updateDoc(doc(db,COL_PERMISOS,String(p.id)),cambios);
+  }
   catch(e){alert("Error al cancelar.");console.error(e);}
 }
 
@@ -568,8 +641,8 @@ async function solicitar(){
   // Consulta puntual: solo los permisos de esa sede en esa fecha
   let delDia=[];
   try{
-    const sd=await getDocs(query(collection(db,COL_PERMISOS),where("sede","==",sedDocente),where("fecha","==",form.fecha)));
-    delDia=sd.docs.map(function(d){return d.data();});
+    const sd=await getDocs(query(collection(db,COL_PERMISOS),where("fecha","==",form.fecha)));
+    delDia=sd.docs.map(function(d){return normalizarPermiso(d.data());}).filter(function(p){return p.sede===normSede(sedDocente);});
   } catch(err){console.error(err);setState({fErr:"No se pudo verificar el cupo del dia. Intenta de nuevo."});return;}
   const enDia=delDia.filter(function(p){return !p.extraordinario&&(p.estado==="pendiente"||p.estado==="aprobado");});
   if(enDia.length>=limSede){
@@ -597,6 +670,7 @@ async function crearExtraordinario(){
   if(!docente){setState({extraErr:"Docente no encontrado."});return;}
   try{
     const id="extra_"+Date.now();
+    await setDoc(doc(db,COL_ADJ,id),{id:id,archivoNombre:ef.archivoNombre||"soporte.pdf",archivoData:ef.archivoData});
     await setDoc(doc(db,COL_PERMISOS,id),{
       id:id,
       docenteId:docente.id,
@@ -605,7 +679,7 @@ async function crearExtraordinario(){
       fecha:ef.fecha,
       motivo:"Permiso extraordinario",
       archivoNombre:ef.archivoNombre,
-      archivoData:ef.archivoData,
+      tieneAdjunto:true,
       estado:"aprobado",
       observacion:"Aprobado por "+user.nombre+" (Extraordinario)",
       ts:new Date().toISOString(),
@@ -632,7 +706,10 @@ async function decidir(id,estado){
   }
   const cambios={estado:estado,observacion:state.modalObs};
   if(pd.extraordinario){cambios.decididoPor=user.nombre;}
-  await updatePermiso(id,cambios);
+  try{
+    Object.assign(cambios,await moverAdjunto(pd));
+    await updatePermiso(id,cambios);
+  } catch(e){console.error(e);alert("No se pudo guardar la decision. Intenta de nuevo.");return;}
   setState({modalPermiso:null,modalObs:""});
 }
 
@@ -900,14 +977,14 @@ function renderPanel(canApprove){
     const p=modalPermiso; const sede=p.sede||"";
     const aprobadosDia=permisos.filter(function(x){return !x.extraordinario&&x.fecha===p.fecha&&x.estado==="aprobado"&&(x.sede||"")===sede;}).length;
     const limSede=getLimiteSede(sede); const restantes=limSede-aprobadosDia;
-    modalHtml='<div class="overlay"><div class="modal"><h3>'+(p.extraordinario?'Revisar permiso extraordinario':'Revisar solicitud')+'</h3><div class="modal-info"><p><b>'+p.docenteNombre+'</b></p>'+(p.sede?'<p style="color:var(--sub)">Sede: '+p.sede+'</p>':'')+'<p style="color:var(--sub)">Fecha: '+fmtDate(p.fecha)+'</p><p style="color:var(--sub)">Motivo: '+p.motivo+'</p>'+(p.archivoData?'<a href="'+p.archivoData+'" download="'+p.archivoNombre+'" style="font-size:12px">Descargar PDF</a>':'')+(p.extraordinario?'<p style="font-size:12px;margin-top:6px;color:#065F46;font-weight:500">Permiso extraordinario: no afecta el cupo diario ni el limite mensual.</p>':'<p style="font-size:12px;margin-top:6px;color:'+(restantes<=0?"var(--red)":"var(--green)")+';font-weight:500">'+(restantes<=0?"Limite de sede alcanzado ("+limSede+"/"+limSede+")":"Cupos disponibles en sede: "+restantes)+'</p>')+'</div><div class="field"><label class="lbl">Observacion (opcional)</label><textarea id="modal-obs" class="inp" rows="3" placeholder="Escribe una observacion...">'+modalObs+'</textarea></div><div class="modal-btns"><button class="btn btn-success" style="flex:1" id="btn-aprobar">Aprobar</button><button class="btn btn-danger" style="flex:1" id="btn-rechazar">Rechazar</button><button class="btn btn-ghost" id="btn-cancelar-modal">Cancelar</button></div></div></div>';
+    modalHtml='<div class="overlay"><div class="modal"><h3>'+(p.extraordinario?'Revisar permiso extraordinario':'Revisar solicitud')+'</h3><div class="modal-info"><p><b>'+p.docenteNombre+'</b></p>'+(p.sede?'<p style="color:var(--sub)">Sede: '+p.sede+'</p>':'')+'<p style="color:var(--sub)">Fecha: '+fmtDate(p.fecha)+'</p><p style="color:var(--sub)">Motivo: '+p.motivo+'</p>'+linkPdf(p,"Descargar PDF","12px")+(p.extraordinario?'<p style="font-size:12px;margin-top:6px;color:#065F46;font-weight:500">Permiso extraordinario: no afecta el cupo diario ni el limite mensual.</p>':'<p style="font-size:12px;margin-top:6px;color:'+(restantes<=0?"var(--red)":"var(--green)")+';font-weight:500">'+(restantes<=0?"Limite de sede alcanzado ("+limSede+"/"+limSede+")":"Cupos disponibles en sede: "+restantes)+'</p>')+'</div><div class="field"><label class="lbl">Observacion (opcional)</label><textarea id="modal-obs" class="inp" rows="3" placeholder="Escribe una observacion...">'+modalObs+'</textarea></div><div class="modal-btns"><button class="btn btn-success" style="flex:1" id="btn-aprobar">Aprobar</button><button class="btn btn-danger" style="flex:1" id="btn-rechazar">Rechazar</button><button class="btn btn-ghost" id="btn-cancelar-modal">Cancelar</button></div></div></div>';
   }
 
   const aprobadosTotal=permisos.filter(function(p){return p.estado==="aprobado"&&(user.rol!=="coordinador"||user.sedes.includes(p.sede||"Sin sede"));}).length;
   const rechazadosTotal=permisos.filter(function(p){return p.estado==="rechazado"&&(user.rol!=="coordinador"||user.sedes.includes(p.sede||"Sin sede"));}).length;
 
   return topbarHtml()+
-    '<div class="page">'+
+    '<div class="page">'+avisoCarga()+
     '<div class="stat-grid">'+
     [["Pendientes",pendientes.length],["Aprobados",aprobadosTotal],["Rechazados",rechazadosTotal]].map(function(s){
       return '<div class="stat"><p class="stat-label">'+s[0]+'</p><p class="stat-val">'+s[1]+'</p></div>';
@@ -930,7 +1007,7 @@ function renderPanel(canApprove){
       '<p style="font-size:12px;color:var(--sub);margin-bottom:12px">'+pendientesFiltrados.length+' solicitud(es)</p>'+
       (pendientesFiltrados.length===0?'<p style="font-size:13px;color:var(--sub)">No hay solicitudes con estos filtros.</p>':'')+
       pendientesFiltrados.map(function(p){
-        return '<div class="perm-row"'+(p.extraordinario?' style="border-left:3px solid #059669"':'')+'><div><div style="display:flex;align-items:center;gap:8px"><p style="font-weight:500;margin:0">'+p.docenteNombre+'</p>'+(p.extraordinario?badgeExtra():'')+'</div><p style="font-size:12px;color:var(--sub)">'+(p.sede?p.sede+" - ":"")+fmtDate(p.fecha)+" - "+p.motivo+'</p>'+(p.archivoData?'<a href="'+p.archivoData+'" download="'+p.archivoNombre+'" style="font-size:11px">Ver PDF</a>':'')+'</div>'+(canApprove&&puedeDecidir(p,user)?'<button class="btn btn-primary btn-sm btn-revisar" data-id="'+p.id+'">Revisar</button>':(p.extraordinario?'<span style="font-size:11px;color:var(--sub);text-align:right">Espera al coordinador<br>de la sede</span>':badge("pendiente")))+'</div>';
+        return '<div class="perm-row"'+(p.extraordinario?' style="border-left:3px solid #059669"':'')+'><div><div style="display:flex;align-items:center;gap:8px"><p style="font-weight:500;margin:0">'+p.docenteNombre+'</p>'+(p.extraordinario?badgeExtra():'')+'</div><p style="font-size:12px;color:var(--sub)">'+(p.sede?p.sede+" - ":"")+fmtDate(p.fecha)+" - "+p.motivo+'</p>'+linkPdf(p,"Ver PDF","11px")+'</div>'+(canApprove&&puedeDecidir(p,user)?'<button class="btn btn-primary btn-sm btn-revisar" data-id="'+p.id+'">Revisar</button>':(p.extraordinario?'<span style="font-size:11px;color:var(--sub);text-align:right">Espera al coordinador<br>de la sede</span>':badge("pendiente")))+'</div>';
       }).join('')
     :"")+
 
@@ -938,7 +1015,7 @@ function renderPanel(canApprove){
       '<div class="filtros"><span style="font-size:13px;color:var(--sub)">Mes:</span><select id="fil-mes-rector" class="inp-sm"><option value="todos">Todos los meses</option>'+mesesR.map(function(k){return '<option value="'+k+'" '+(filtroMesRector===k?"selected":"")+'>'+getMonthLabel(k)+'</option>';}).join('')+'</select><span style="font-size:12px;color:var(--sub)">'+histF.length+' registro(s)</span></div>'+
       (histF.length===0?'<p style="font-size:13px;color:var(--sub)">Sin registros.</p>':'')+
       histF.map(function(p){
-        return '<div class="perm-row"><div><p style="font-weight:500">'+p.docenteNombre+'</p><p style="font-size:12px;color:var(--sub)">'+(p.sede?p.sede+" - ":"")+fmtDate(p.fecha)+" - "+p.motivo+'</p>'+(p.observacion?'<p style="font-size:11px;color:var(--sub)">Obs: '+p.observacion+'</p>':'')+(p.archivoData?'<a href="'+p.archivoData+'" download="'+p.archivoNombre+'" style="font-size:11px">Ver PDF</a>':'')+'</div>'+badge(p.estado)+'</div>';
+        return '<div class="perm-row"><div><p style="font-weight:500">'+p.docenteNombre+'</p><p style="font-size:12px;color:var(--sub)">'+(p.sede?p.sede+" - ":"")+fmtDate(p.fecha)+" - "+p.motivo+'</p>'+(p.observacion?'<p style="font-size:11px;color:var(--sub)">Obs: '+p.observacion+'</p>':'')+linkPdf(p,"Ver PDF","11px")+'</div>'+badge(p.estado)+'</div>';
       }).join('')
     :"")+
 
@@ -986,7 +1063,7 @@ function renderPanel(canApprove){
           (p.solicitadoPorDocente?'<p style="font-size:11px;color:var(--sub)">Solicitado por el docente'+(p.motivo?' - '+p.motivo:'')+'</p>':(p.creadoPor?'<p style="font-size:11px;color:var(--sub)">Creado por: '+p.creadoPor+'</p>':''))+
           (p.decididoPor?'<p style="font-size:11px;color:var(--sub)">'+(p.estado==="rechazado"?"Rechazado":"Aprobado")+' por: '+p.decididoPor+'</p>':'')+
           (p.observacion&&p.solicitadoPorDocente?'<p style="font-size:11px;color:var(--sub)">Obs: '+p.observacion+'</p>':'')+
-          (p.archivoData?'<a href="'+p.archivoData+'" download="'+p.archivoNombre+'" style="font-size:11px">Ver PDF</a>':'')+
+          linkPdf(p,"Ver PDF","11px")+
           '</div>'+(p.estado==="pendiente"&&puedeDecidir(p,user)?'<button class="btn btn-primary btn-sm btn-revisar" data-id="'+p.id+'">Revisar</button>':badge(p.estado||"aprobado"))+'</div>';
       }).join('')
     :"")+
@@ -1083,6 +1160,13 @@ function renderAdmin(){
     '</div>'+
 
     '<div class="card">'+
+    '<p style="font-size:14px;font-weight:500;margin-bottom:4px">Optimizar adjuntos</p>'+
+    '<p style="font-size:12px;color:var(--sub);margin-bottom:14px">Mueve los PDF de los permisos aprobados, rechazados y cancelados a una coleccion aparte, para que la app cargue mas rapido. Se hace una sola vez; los PDF se siguen viendo con "Ver PDF".</p>'+
+    '<button class="btn btn-primary btn-sm" id="btn-migrar-adj" '+(state.migrando?"disabled":"")+'>'+(state.migrando?"Moviendo PDF...":"Mover PDF de permisos decididos")+'</button>'+
+    (state.migraMsg.text?'<p style="font-size:13px;margin-top:10px;color:'+(state.migraMsg.type==="ok"?"var(--green)":state.migraMsg.type==="err"?"var(--red)":"var(--sub)")+'">'+state.migraMsg.text+'</p>':'')+
+    '</div>'+
+
+    '<div class="card">'+
     '<p style="font-size:14px;font-weight:500;margin-bottom:4px">Cargar permisos historicos desde Excel</p>'+
     '<p style="font-size:12px;color:var(--sub);margin-bottom:14px">Columnas: DOCUMENTO, NOMBRE, SEDE, FECHA (DD/MM/YYYY). Soporta multiples hojas.</p>'+
     '<label class="btn btn-success btn-sm" style="display:inline-block;cursor:pointer">Seleccionar Excel de permisos historicos<input type="file" id="inp-excel-permisos" accept=".xlsx,.xls" style="display:none"/></label>'+
@@ -1164,7 +1248,7 @@ function renderDocente(){
   const hoyStr=hoy.getFullYear()+"-"+String(hoy.getMonth()+1).padStart(2,"0")+"-"+String(hoy.getDate()).padStart(2,"0");
 
   return topbarHtml()+
-    '<div class="page">'+
+    '<div class="page">'+avisoCarga()+
     '<div class="stat-grid">'+
     [["Usados este mes",usadosMes+"/3"],["Total enviados",misPermisos.length],["Aprobados",misPermisos.filter(function(p){return p.estado==="aprobado";}).length]].map(function(s){
       return '<div class="stat"><p class="stat-label">'+s[0]+'</p><p class="stat-val">'+s[1]+'</p></div>';
@@ -1194,7 +1278,7 @@ function renderDocente(){
     (histF.length===0?'<p style="font-size:13px;color:var(--sub)">No hay permisos para mostrar.</p>':'')+
     histF.map(function(p){
       const puedeCancelar=(p.estado==="pendiente"||p.estado==="aprobado")&&p.fecha>hoyStr;
-      return '<div class="perm-row"><div><div style="display:flex;align-items:center;gap:8px"><p style="font-weight:500;margin:0">'+fmtDate(p.fecha)+'</p>'+(p.extraordinario?badgeExtra():'')+'</div><p style="font-size:12px;color:var(--sub)">'+p.motivo+'</p>'+(p.archivoData?'<a href="'+p.archivoData+'" download="'+p.archivoNombre+'" style="font-size:11px">Descargar PDF</a>':'')+(p.observacion?'<p style="font-size:11px;color:var(--sub)">Obs: '+p.observacion+'</p>':'')+'</div>'+
+      return '<div class="perm-row"><div><div style="display:flex;align-items:center;gap:8px"><p style="font-weight:500;margin:0">'+fmtDate(p.fecha)+'</p>'+(p.extraordinario?badgeExtra():'')+'</div><p style="font-size:12px;color:var(--sub)">'+p.motivo+'</p>'+linkPdf(p,"Descargar PDF","11px")+(p.observacion?'<p style="font-size:11px;color:var(--sub)">Obs: '+p.observacion+'</p>':'')+'</div>'+
         '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">'+badge(p.estado)+
         (puedeCancelar?'<button class="btn btn-danger btn-sm btn-cancelar-permiso" data-id="'+p.id+'" style="font-size:11px;padding:4px 10px">Cancelar</button>':'')+
         '</div></div>';
