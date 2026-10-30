@@ -176,6 +176,32 @@ function getLimiteSede(sede){ return (state.limitesSedes&&state.limitesSedes[sed
 // Despues del login, cada rol carga solo lo que necesita.
 let unsubPermisos=null;
 
+// Normaliza una sede: texto sin espacios ("1", " 1 " y 1 quedan como "1")
+function normSede(v){ return v===undefined||v===null ? "" : String(v).trim(); }
+// Todas las formas en que una sede puede estar guardada (texto y numero)
+function variantesSede(lista){
+  const out=[];
+  lista.forEach(function(v){
+    const t=normSede(v);
+    [v,t].forEach(function(x){ if(out.indexOf(x)<0) out.push(x); });
+    if(t!==""&&!isNaN(Number(t))&&out.indexOf(Number(t))<0) out.push(Number(t));
+  });
+  return out;
+}
+function normalizarPermiso(p){ p.sede=normSede(p.sede); return p; }
+function normalizarUsuario(u){
+  if(u.rol==="coordinador"){
+    const raw=Array.isArray(u.sedes)?u.sedes:String(u.sedes||"").split(",");
+    u.sedes=raw.map(normSede).filter(Boolean);
+  }
+  if(u.sede!==undefined) u.sede=normSede(u.sede);
+  return u;
+}
+function avisarErrorDatos(err){
+  console.error("Firestore:",err);
+  alert("No se pudieron cargar los permisos.\n\nDetalle: "+(err&&err.code?err.code+" - ":"")+(err&&err.message?err.message:err));
+}
+
 // Crea los usuarios por defecto solo si la coleccion esta vacia (1 lectura)
 async function seedSysUsersSiVacio(){
   const snap=await getDocs(query(collection(db,COL_SYSUSERS),limit(1)));
@@ -198,8 +224,13 @@ async function loadDocentes(){
 async function loadDocentesDeSedes(sedes){
   if(!sedes||sedes.length===0){state.docentes=[];return;}
   if(sedes.length>30){await loadDocentes();return;}
-  const snap=await getDocs(query(collection(db,COL_DOCENTES),where("sede","in",sedes)));
-  state.docentes=snap.docs.map(function(d){return d.data();});
+  const vals=variantesSede(sedes);
+  if(vals.length>30){await loadDocentes();}
+  else{
+    const snap=await getDocs(query(collection(db,COL_DOCENTES),where("sede","in",vals)));
+    state.docentes=snap.docs.map(function(d){return d.data();});
+  }
+  state.docentes.forEach(function(d){d.sede=normSede(d.sede);});
 }
 async function loadCoordinadores(){
   const snap=await getDocs(collection(db,COL_COORDS));
@@ -235,14 +266,15 @@ function listenPermisos(user){
     const sedes=(user.sedes||[]).slice();
     if(sedes.includes("Sin sede")) sedes.push("");
     if(sedes.length===0){state.permisos=[];return;}
-    q=sedes.length<=30 ? query(col,where("sede","in",sedes)) : query(col,orderBy("ts","desc"));
+    const vals=variantesSede(sedes);
+    q=vals.length<=30 ? query(col,where("sede","in",vals)) : query(col,orderBy("ts","desc"));
   } else {
     q=query(col,orderBy("ts","desc"));
   }
   unsubPermisos=onSnapshot(q,function(snap){
-    state.permisos=ordenarPorTs(snap.docs.map(function(d){return d.data();}));
+    state.permisos=ordenarPorTs(snap.docs.map(function(d){return normalizarPermiso(d.data());}));
     render();
-  },function(err){console.error("Firestore:",err);});
+  },avisarErrorDatos);
 }
 function stopPermisos(){
   if(unsubPermisos){unsubPermisos();unsubPermisos=null;}
@@ -372,6 +404,7 @@ async function login(){
     const todos=[].concat.apply([],res.map(function(r){return r.docs.map(function(d){return d.data();});}));
     const u=todos.find(function(x){return x.password===password;});
     if(!u){loginEnCurso=false;setState({loginErr:"Documento o contrasena incorrectos."});return;}
+    normalizarUsuario(u);
     await cargarDatosDeRol(u);
     loginEnCurso=false;
     setState({user:u,loginErr:""});
