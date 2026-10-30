@@ -616,6 +616,20 @@ async function cancelarPermiso(id){
   catch(e){alert("Error al cancelar.");console.error(e);}
 }
 
+// ── LIMITE DE EXTRAORDINARIOS: 1 por dia y por sede ──
+async function extraordinarioDelDia(sede,fecha){
+  const sd=await getDocs(query(collection(db,COL_PERMISOS),where("fecha","==",fecha)));
+  const s=normSede(sede);
+  return sd.docs.map(function(d){return d.data();}).find(function(p){
+    return p.extraordinario&&(p.estado==="pendiente"||p.estado==="aprobado")&&normSede(p.sede)===s;
+  })||null;
+}
+function msgExtraOcupado(p,fecha,sede,mostrarNombre){
+  return "No se puede solicitar otro permiso extraordinario para el "+fmtDate(fecha)+" en la sede "+(normSede(sede)||"Sin sede")+
+    ": ya hay uno "+(p.estado==="pendiente"?"pendiente de aprobacion":"aprobado")+
+    (mostrarNombre&&p.docenteNombre?" ("+p.docenteNombre+")":"")+". Solo se permite 1 permiso extraordinario por dia en cada sede.";
+}
+
 // ── SOLICITAR ──
 async function solicitar(){
   const form=state.form; const user=state.user; const permisos=state.permisos;
@@ -626,6 +640,10 @@ async function solicitar(){
     const sedeDoc=user.sede||"";
     const yaTiene=permisos.some(function(p){return p.docenteId===user.id&&p.fecha===form.fecha&&(p.estado==="pendiente"||p.estado==="aprobado");});
     if(yaTiene){setState({fErr:"Ya tienes una solicitud pendiente o aprobada para el "+fmtDate(form.fecha)+"."});return;}
+    try{
+      const ocupado=await extraordinarioDelDia(sedeDoc,form.fecha);
+      if(ocupado){const m=msgExtraOcupado(ocupado,form.fecha,sedeDoc,false);setState({fErr:m});alert(m);return;}
+    } catch(err){console.error(err);setState({fErr:"No se pudo verificar los permisos extraordinarios del dia. Intenta de nuevo."});return;}
     try{
       const id="extra_"+Date.now();
       await setDoc(doc(db,COL_PERMISOS,id),{id:id,docenteId:user.id,docenteNombre:user.nombre,sede:sedeDoc,fecha:form.fecha,motivo:form.motivo,archivoNombre:form.archivoNombre,archivoData:form.archivoData,estado:"pendiente",observacion:"",ts:new Date().toISOString(),extraordinario:true,creadoPor:user.nombre,solicitadoPorDocente:true});
@@ -669,6 +687,10 @@ async function crearExtraordinario(){
   if(!ef.archivoData){setState({extraErr:"El soporte PDF es obligatorio."});return;}
   const docente=state.docentes.find(function(d){return d.id===ef.docenteId;});
   if(!docente){setState({extraErr:"Docente no encontrado."});return;}
+  try{
+    const ocupado=await extraordinarioDelDia(ef.sede,ef.fecha);
+    if(ocupado){const m=msgExtraOcupado(ocupado,ef.fecha,ef.sede,true);setState({extraErr:m});alert(m);return;}
+  } catch(err){console.error(err);setState({extraErr:"No se pudo verificar los permisos extraordinarios del dia. Intenta de nuevo."});return;}
   try{
     const id="extra_"+Date.now();
     await setDoc(doc(db,COL_ADJ,id),{id:id,archivoNombre:ef.archivoNombre||"soporte.pdf",archivoData:ef.archivoData});
