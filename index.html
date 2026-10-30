@@ -110,6 +110,7 @@ let state = {
   tab:"pendientes", modalPermiso:null, modalObs:"",
   modalPw:false, modalReset:null,
   modalCoord:false, editCoord:null,
+  modalDoc:null, docForm:{nombre:"",sede:""}, docErr:"", guardandoDoc:false, usuariosMsg:{type:"",text:""}, filtroUsuarios:"",
   coordForm:{nombre:"",documento:"",password:"",sedes:[]},
   coordErr:"", coordOk:"",
   // Permiso extraordinario
@@ -397,7 +398,7 @@ document.addEventListener("change",function(e){
 // ── EVENTO GLOBAL ──
 document.addEventListener("click",async function(e){
   // Ignorar clicks dentro del modal extraordinario excepto botones especificos
-  if(e.target.closest(".overlay") && !e.target.closest("#btn-extra-save") && !e.target.closest("#btn-extra-cancel") && !e.target.closest("#btn-pw-save") && !e.target.closest("#btn-pw-cancel") && !e.target.closest("#btn-reset-save") && !e.target.closest("#btn-reset-cancel") && !e.target.closest("#btn-coord-save") && !e.target.closest("#btn-coord-cancel") && !e.target.closest("#btn-aprobar") && !e.target.closest("#btn-rechazar") && !e.target.closest("#btn-cancelar-modal")) {
+  if(e.target.closest(".overlay") && !e.target.closest("#btn-extra-save") && !e.target.closest("#btn-extra-cancel") && !e.target.closest("#btn-pw-save") && !e.target.closest("#btn-pw-cancel") && !e.target.closest("#btn-reset-save") && !e.target.closest("#btn-reset-cancel") && !e.target.closest("#btn-coord-save") && !e.target.closest("#btn-coord-cancel") && !e.target.closest("#btn-doc-save") && !e.target.closest("#btn-doc-cancel") && !e.target.closest("#btn-aprobar") && !e.target.closest("#btn-rechazar") && !e.target.closest("#btn-cancelar-modal")) {
     // Dejar pasar solo los botones del modal, bloquear el resto
     if(!e.target.closest("button") && !e.target.closest("a")) return;
   }
@@ -845,6 +846,63 @@ function bindModalExtra(){
   };
 }
 
+// ── MODAL EDITAR DOCENTE ──
+function escAttr(v){ return String(v===undefined||v===null?"":v).replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;"); }
+function modalDocHtml(){
+  if(!state.modalDoc) return "";
+  const d=state.docentes.find(function(x){return x.id===state.modalDoc;});
+  if(!d) return "";
+  const df=state.docForm;
+  const sedes=todasSedesDisp();
+  return '<div class="overlay"><div class="modal"><h3>Editar docente</h3>'+
+    '<div class="field"><label class="lbl">Numero de documento</label><input class="inp" value="'+escAttr(d.documento)+'" readonly style="background:var(--gray)"/>'+
+    '<p style="font-size:11px;color:var(--sub);margin-top:3px">El documento no se puede cambiar porque identifica al docente y sus permisos.</p></div>'+
+    '<div class="field"><label class="lbl">Nombre completo</label><input class="inp" id="df-nombre" value="'+escAttr(df.nombre)+'"/></div>'+
+    '<div class="field"><label class="lbl">Sede asignada</label><input class="inp" id="df-sede" list="lista-sedes" value="'+escAttr(df.sede)+'" placeholder="Escribe o elige una sede"/>'+
+    '<datalist id="lista-sedes">'+sedes.map(function(s){return '<option value="'+escAttr(s)+'">';}).join('')+'</datalist>'+
+    '<p style="font-size:11px;color:var(--sub);margin-top:3px">Si cambias la sede, sus solicitudes pendientes pasan a la nueva sede. Los permisos ya decididos conservan la sede donde se tramitaron.</p></div>'+
+    (state.docErr?'<p class="msg-err">'+state.docErr+'</p>':'')+
+    '<div class="modal-btns"><button class="btn btn-primary" style="flex:1" id="btn-doc-save" '+(state.guardandoDoc?"disabled":"")+'>'+(state.guardandoDoc?"Guardando...":"Guardar")+'</button><button class="btn btn-ghost" id="btn-doc-cancel">Cancelar</button></div></div></div>';
+}
+function bindModalDoc(){
+  if(!state.modalDoc) return;
+  const fn=document.getElementById("df-nombre"); if(fn) fn.oninput=function(e){state.docForm.nombre=e.target.value;};
+  const fs=document.getElementById("df-sede"); if(fs) fs.oninput=function(e){state.docForm.sede=e.target.value;};
+  const bs=document.getElementById("btn-doc-save"); if(bs) bs.onclick=guardarDocente;
+  const bc=document.getElementById("btn-doc-cancel"); if(bc) bc.onclick=function(){setState({modalDoc:null,docErr:""});};
+}
+async function guardarDocente(){
+  if(state.guardandoDoc) return;
+  const d=state.docentes.find(function(x){return x.id===state.modalDoc;});
+  if(!d) return;
+  const nombre=state.docForm.nombre.trim().replace(/\s+/g," ");
+  const sede=normSede(state.docForm.sede);
+  if(!nombre){setState({docErr:"Escribe el nombre del docente."});return;}
+  if(!sede){setState({docErr:"Escribe o elige la sede."});return;}
+  const cambioNombre=nombre!==(d.nombre||"");
+  const cambioSede=sede!==normSede(d.sede);
+  if(!cambioNombre&&!cambioSede){setState({modalDoc:null,docErr:""});return;}
+  setState({guardandoDoc:true,docErr:""});
+  try{
+    const updated=Object.assign({},d,{nombre:nombre,sede:sede});
+    await setDoc(doc(db,COL_DOCENTES,d.id),updated);
+    // Actualiza sus permisos: el nombre en todos, la sede solo en los pendientes
+    let actualizados=0;
+    const snap=await getDocs(query(collection(db,COL_PERMISOS),where("docenteId","==",d.id)));
+    for(const pd of snap.docs){
+      const p=pd.data(); const cambios={};
+      if(cambioNombre&&p.docenteNombre!==nombre) cambios.docenteNombre=nombre;
+      if(cambioSede&&p.estado==="pendiente"&&normSede(p.sede)!==sede) cambios.sede=sede;
+      if(Object.keys(cambios).length){await updateDoc(pd.ref,cambios);actualizados++;}
+    }
+    state.docentes=state.docentes.map(function(x){return x.id===d.id?updated:x;});
+    setState({guardandoDoc:false,modalDoc:null,usuariosMsg:{type:"ok",text:"Docente "+nombre+" actualizado"+(actualizados?" ("+actualizados+" permiso(s) ajustados)":"")+"."}});
+  } catch(e){
+    console.error(e);
+    setState({guardandoDoc:false,docErr:"No se pudo guardar. Intenta de nuevo."});
+  }
+}
+
 // ── MODAL COORDINADOR ──
 function modalCoordHtml(){
   if(!state.modalCoord) return "";
@@ -1178,18 +1236,35 @@ function renderAdmin(){
     '<p style="font-size:14px;font-weight:500">Usuarios del sistema ('+allUsers.length+')</p>'+
     (docentes.length>0?'<button class="btn btn-danger btn-sm" id="btn-clear">Limpiar docentes</button>':'')+
     '</div>'+
+    (state.usuariosMsg.text?'<p style="font-size:13px;margin-bottom:12px;color:'+(state.usuariosMsg.type==="ok"?"var(--green)":"var(--red)")+'">'+state.usuariosMsg.text+'</p>':'')+
     (allUsers.length===0?'<p style="font-size:13px;color:var(--sub)">Sin usuarios.</p>':
+    '<input id="fil-usuarios" class="inp" style="margin-bottom:12px" placeholder="Buscar por nombre, documento o sede..." value="'+escAttr(state.filtroUsuarios)+'"/>'+
     '<table><thead><tr><th>Documento</th><th>Nombre</th><th>Sede</th><th>Rol</th><th></th></tr></thead><tbody>'+
     allUsers.map(function(u){
-      return '<tr><td style="color:var(--sub)">'+u.documento+'</td><td style="font-weight:500">'+u.nombre+'</td><td style="color:var(--sub)">'+(u.sede||"--")+'</td><td><span class="badge" style="background:var(--blue-light);color:var(--blue)">'+rolLabel(u.rol)+'</span></td><td><button class="btn btn-blue-light btn-sm btn-reset-user" data-id="'+u.id+'">Clave</button></td></tr>';
+      const buscar=(String(u.documento||"")+" "+String(u.nombre||"")+" "+String(u.sede||"")).toLowerCase();
+      const visible=!state.filtroUsuarios||buscar.indexOf(state.filtroUsuarios.toLowerCase())>=0;
+      return '<tr class="fila-usuario" data-buscar="'+escAttr(buscar)+'"'+(visible?'':' style="display:none"')+'><td style="color:var(--sub)">'+u.documento+'</td><td style="font-weight:500">'+u.nombre+'</td><td style="color:var(--sub)">'+(u.sede||"--")+'</td><td><span class="badge" style="background:var(--blue-light);color:var(--blue)">'+rolLabel(u.rol)+'</span></td><td><div style="display:flex;gap:6px">'+
+        (u.rol==="docente"?'<button class="btn btn-blue-light btn-sm btn-edit-doc" data-id="'+u.id+'">Editar</button>':'')+
+        '<button class="btn btn-blue-light btn-sm btn-reset-user" data-id="'+u.id+'">Clave</button></div></td></tr>';
     }).join('')+'</tbody></table>')+
     '</div>'+
     '</div>'+
-    modalPwHtml()+modalResetHtml()+modalCoordHtml();
+    modalPwHtml()+modalResetHtml()+modalCoordHtml()+modalDocHtml();
 }
 
 function bindAdmin(){
-  bindTopbar(); bindModalPw(); bindModalReset(); bindModalCoord();
+  bindTopbar(); bindModalPw(); bindModalReset(); bindModalCoord(); bindModalDoc();
+  const fu=document.getElementById("fil-usuarios");
+  if(fu) fu.oninput=function(e){
+    const t=e.target.value.toLowerCase(); state.filtroUsuarios=e.target.value;
+    document.querySelectorAll(".fila-usuario").forEach(function(tr){tr.style.display=(!t||tr.dataset.buscar.indexOf(t)>=0)?"":"none";});
+  };
+  document.querySelectorAll(".btn-edit-doc").forEach(function(b){
+    b.onclick=function(){
+      const d=state.docentes.find(function(x){return x.id===b.dataset.id;});
+      if(d) setState({modalDoc:d.id,docForm:{nombre:d.nombre||"",sede:d.sede||""},docErr:"",usuariosMsg:{type:"",text:""}});
+    };
+  });
 
   const bsl=document.getElementById("btn-save-limites");
   if(bsl){
