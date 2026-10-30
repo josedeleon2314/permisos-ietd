@@ -84,7 +84,7 @@
 <div id="app"><div class="loading">Cargando sistema...</div></div>
 <script type="module">
 import { initializeApp } from "firebase/app";
-import { getFirestore, collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, onSnapshot, query, orderBy } from "firebase/firestore";
+import { getFirestore, collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, onSnapshot, query, orderBy, where, limit } from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAMKOjybLiBmcuws8r5kMitWAH1hHkGNJM",
@@ -172,25 +172,41 @@ function badgeExtra(){ return '<span class="badge" style="background:#D1FAE5;col
 function getLimiteSede(sede){ return (state.limitesSedes&&state.limitesSedes[sede]) ? state.limitesSedes[sede] : state.maxPerDay; }
 
 // ── FIREBASE ──
-async function loadSysUsers(){
-  const snap=await getDocs(collection(db,COL_SYSUSERS));
+// Ahorro de cuota: antes del login no se descarga ninguna coleccion completa.
+// Despues del login, cada rol carga solo lo que necesita.
+let unsubPermisos=null;
+
+// Crea los usuarios por defecto solo si la coleccion esta vacia (1 lectura)
+async function seedSysUsersSiVacio(){
+  const snap=await getDocs(query(collection(db,COL_SYSUSERS),limit(1)));
   if(snap.empty){
     const defaults=[
       {id:"admin",nombre:"Administrador",rol:"admin",password:"admin123",documento:"admin",sede:""},
       {id:"rector",nombre:"Rector Principal",rol:"rector",password:"rector123",documento:"rector",sede:""}
     ];
     for(const u of defaults) await setDoc(doc(db,COL_SYSUSERS,u.id),u);
-    state.sysUsers=defaults;
-  } else {
-    state.sysUsers=snap.docs.map(function(d){return d.data();});
   }
+}
+async function loadSysUsers(){
+  const snap=await getDocs(collection(db,COL_SYSUSERS));
+  state.sysUsers=snap.docs.map(function(d){return d.data();});
 }
 async function loadDocentes(){
   const snap=await getDocs(collection(db,COL_DOCENTES));
   state.docentes=snap.docs.map(function(d){return d.data();});
 }
+async function loadDocentesDeSedes(sedes){
+  if(!sedes||sedes.length===0){state.docentes=[];return;}
+  if(sedes.length>30){await loadDocentes();return;}
+  const snap=await getDocs(query(collection(db,COL_DOCENTES),where("sede","in",sedes)));
+  state.docentes=snap.docs.map(function(d){return d.data();});
+}
 async function loadCoordinadores(){
   const snap=await getDocs(collection(db,COL_COORDS));
+  state.coordinadores=snap.docs.map(function(d){return d.data();});
+}
+async function loadCoordinadoresDeSede(sede){
+  const snap=await getDocs(query(collection(db,COL_COORDS),where("sedes","array-contains",sede||"Sin sede")));
   state.coordinadores=snap.docs.map(function(d){return d.data();});
 }
 async function loadConfig(){
@@ -205,11 +221,49 @@ async function loadConfig(){
     state.maxTemp=state.maxPerDay;
   } catch(e){ state.maxPerDay=5; state.limitesSedes={}; state.maxTemp=5; }
 }
-function listenPermisos(){
-  onSnapshot(query(collection(db,COL_PERMISOS),orderBy("ts","desc")),function(snap){
-    state.permisos=snap.docs.map(function(d){return d.data();});
+function ordenarPorTs(lista){
+  return lista.sort(function(a,b){return String(b.ts||"").localeCompare(String(a.ts||""));});
+}
+// Escucha solo los permisos que le corresponden al usuario
+function listenPermisos(user){
+  stopPermisos();
+  const col=collection(db,COL_PERMISOS);
+  let q;
+  if(user.rol==="docente"){
+    q=query(col,where("docenteId","==",user.id));
+  } else if(user.rol==="coordinador"){
+    const sedes=(user.sedes||[]).slice();
+    if(sedes.includes("Sin sede")) sedes.push("");
+    if(sedes.length===0){state.permisos=[];return;}
+    q=sedes.length<=30 ? query(col,where("sede","in",sedes)) : query(col,orderBy("ts","desc"));
+  } else {
+    q=query(col,orderBy("ts","desc"));
+  }
+  unsubPermisos=onSnapshot(q,function(snap){
+    state.permisos=ordenarPorTs(snap.docs.map(function(d){return d.data();}));
     render();
   },function(err){console.error("Firestore:",err);});
+}
+function stopPermisos(){
+  if(unsubPermisos){unsubPermisos();unsubPermisos=null;}
+}
+// Carga los datos que necesita cada rol despues del login
+async function cargarDatosDeRol(user){
+  await loadConfig();
+  if(user.rol==="admin"){
+    await loadSysUsers(); await loadDocentes(); await loadCoordinadores();
+    state.permisos=[];
+    return;
+  }
+  if(user.rol==="rector"){
+    await loadDocentes(); await loadCoordinadores();
+  } else if(user.rol==="coordinador"){
+    await loadDocentesDeSedes(user.sedes||[]);
+    state.coordinadores=[user];
+  } else if(user.rol==="docente"){
+    await loadCoordinadoresDeSede(user.sede);
+  }
+  listenPermisos(user);
 }
 async function saveDocentes(list){
   const snap=await getDocs(collection(db,COL_DOCENTES));
@@ -223,11 +277,7 @@ async function saveSysUser(u){ await setDoc(doc(db,COL_SYSUSERS,u.id),u); }
 
 async function init(){
   try{
-    await loadSysUsers();
-    await loadDocentes();
-    await loadCoordinadores();
-    await loadConfig();
-    listenPermisos();
+    await seedSysUsersSiVacio();
     render();
   } catch(e){
     console.error("Init:",e);
@@ -307,15 +357,31 @@ document.addEventListener("click",async function(e){
 });
 
 // ── AUTH ──
-function login(){
+let loginEnCurso=false;
+async function login(){
+  if(loginEnCurso) return;
   const documento=document.getElementById("inp-doc").value.trim();
   const password=document.getElementById("inp-pass").value;
-  const todos=[...state.sysUsers,...state.docentes,...state.coordinadores];
-  const u=todos.find(function(x){return x.documento===documento&&x.password===password;});
-  if(!u){setState({loginErr:"Documento o contrasena incorrectos."});return;}
-  setState({user:u,loginErr:""});
+  if(!documento||!password){setState({loginErr:"Escribe documento y contrasena."});return;}
+  loginEnCurso=true;
+  const btn=document.getElementById("btn-login"); if(btn){btn.disabled=true;btn.textContent="Ingresando...";}
+  try{
+    // Busca solo los usuarios con ese documento (pocas lecturas en lugar de todas)
+    const buscar=function(col){return getDocs(query(collection(db,col),where("documento","==",documento),limit(5)));};
+    const res=await Promise.all([buscar(COL_SYSUSERS),buscar(COL_DOCENTES),buscar(COL_COORDS)]);
+    const todos=[].concat.apply([],res.map(function(r){return r.docs.map(function(d){return d.data();});}));
+    const u=todos.find(function(x){return x.password===password;});
+    if(!u){loginEnCurso=false;setState({loginErr:"Documento o contrasena incorrectos."});return;}
+    await cargarDatosDeRol(u);
+    loginEnCurso=false;
+    setState({user:u,loginErr:""});
+  } catch(e){
+    console.error("Login:",e);
+    loginEnCurso=false;
+    setState({loginErr:"No se pudo conectar. Intenta de nuevo en unos minutos."});
+  }
 }
-function logout(){ setState({user:null,tab:"pendientes",modalPw:false,form:{fecha:"",motivo:"",archivoNombre:"",archivoData:"",tipo:"normal"}}); }
+function logout(){ stopPermisos(); state.permisos=[]; state.docentes=[]; state.coordinadores=[]; state.sysUsers=[]; setState({user:null,tab:"pendientes",modalPw:false,form:{fecha:"",motivo:"",archivoNombre:"",archivoData:"",tipo:"normal"}}); }
 
 // ── CONTRASENAS ──
 async function cambiarPw(){
@@ -468,7 +534,13 @@ async function solicitar(){
   if(enMes.length>=3){setState({fErr:"Ya tienes 3 permisos este mes."});return;}
   const sedDocente=user.sede||"";
   const limSede=getLimiteSede(sedDocente);
-  const enDia=permisos.filter(function(p){return !p.extraordinario&&p.fecha===form.fecha&&(p.estado==="pendiente"||p.estado==="aprobado")&&(p.sede||"")===sedDocente;});
+  // Consulta puntual: solo los permisos de esa sede en esa fecha
+  let delDia=[];
+  try{
+    const sd=await getDocs(query(collection(db,COL_PERMISOS),where("sede","==",sedDocente),where("fecha","==",form.fecha)));
+    delDia=sd.docs.map(function(d){return d.data();});
+  } catch(err){console.error(err);setState({fErr:"No se pudo verificar el cupo del dia. Intenta de nuevo."});return;}
+  const enDia=delDia.filter(function(p){return !p.extraordinario&&(p.estado==="pendiente"||p.estado==="aprobado");});
   if(enDia.length>=limSede){
     const aprobados=enDia.filter(function(p){return p.estado==="aprobado";}).length;
     const pendientes=enDia.filter(function(p){return p.estado==="pendiente";}).length;
